@@ -8,6 +8,21 @@ use App\Services\WhatsApp\WhatsAppInbox;
 $chats = new WhatsAppChatService($db);
 $inbox = new WhatsAppInbox(new DeviceLink($db));
 try {
+    if ($path === '/api/whatsapp/chats/delete' && $method === 'POST') {
+        $input = json_decode(file_get_contents('php://input') ?: '', true);
+        if (!is_array($input)) $input = [];
+        respond($chats->deleteChat((string) ($input['phone'] ?? '')));
+    }
+    if ($path === '/api/whatsapp/chats/message/delete' && $method === 'POST') {
+        $input = json_decode(file_get_contents('php://input') ?: '', true);
+        if (!is_array($input)) $input = [];
+        respond($chats->deleteMessage(
+            (string) ($input['phone'] ?? ''),
+            (string) ($input['direction'] ?? ''),
+            (string) ($input['body'] ?? ''),
+            (string) ($input['created_at'] ?? '')
+        ));
+    }
     if ($path === '/api/whatsapp/chats' && $method === 'GET') {
         try {
             $live = $inbox->conversations();
@@ -26,6 +41,9 @@ try {
         } catch (RuntimeException $e) {
             $thread = $chats->savedThread($jid, $choice['id']);
             if ($thread === null) throw $e;
+        }
+        if (isset($thread['chat'])) {
+            $thread['messages'] = $chats->visibleMessages((string) ($thread['chat']['phone'] ?? ''), $thread['messages'] ?? []);
         }
         if (isset($thread['chat']) && empty($thread['chat']['senders'])) {
             $chatPhone = (string) ($thread['chat']['phone'] ?? '');

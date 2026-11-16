@@ -2627,6 +2627,45 @@ body:has(#wa-sent.view:not([hidden])) main { padding-top: 0 !important; padding-
   border-radius: 8px 8px 8px 2px;
   align-self: flex-start;
 }
+.wa-bubble-del {
+  display: none;
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid #e4ebe6;
+  border-radius: 50%;
+  background: #fff;
+  color: #667781;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(11, 20, 26, 0.15);
+}
+.wa-bubble:hover .wa-bubble-del,
+.wa-bubble-del:focus-visible {
+  display: block;
+}
+.wa-bubble-del:hover {
+  color: #b42318;
+  border-color: #f1c0bd;
+}
+.wa-chat-del-btn {
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  border: 1px solid #f1c0bd;
+  border-radius: 16px;
+  background: #fff;
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.wa-chat-del-btn:hover {
+  background: #fef3f2;
+}
 .wa-bubble-meta {
   display: inline-flex;
   align-items: center;
@@ -4402,6 +4441,36 @@ body[data-channel="whatsapp"] .sheet-schedule-tag {
   width: 14px !important;
   height: 14px !important;
   color: #ffffff !important;
+}
+
+/* Email sheet: ID and Agency / Name each get their own column, like the WhatsApp sheet */
+body:not([data-channel="whatsapp"]) #sheet-preview th#sheet-col-id {
+  width: 64px !important;
+  text-align: left !important;
+}
+body:not([data-channel="whatsapp"]) #sheet-preview th#sheet-col-extra {
+  min-width: 170px !important;
+  text-align: left !important;
+}
+body:not([data-channel="whatsapp"]) #sheet-preview td.cell-sheet-id {
+  width: 64px !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  color: #142e25 !important;
+  white-space: nowrap !important;
+  text-align: left !important;
+  vertical-align: middle !important;
+}
+body:not([data-channel="whatsapp"]) #sheet-preview td.cell-sheet-agency {
+  max-width: 240px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  color: #1e3a2f !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  text-align: left !important;
+  vertical-align: middle !important;
 }
 
 /* 5. WhatsApp 6-Column Proportional Table Architecture */

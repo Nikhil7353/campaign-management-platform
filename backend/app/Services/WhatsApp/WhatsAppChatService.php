@@ -17,6 +17,7 @@ final class WhatsAppChatService
 
     public function noteOutgoing(string $phone, string $body, string $at, string $deviceId = ''): int
     {
+        if ($this->isHidden($phone, 'out', trim($body), $at)) return 0;
         $id = $this->chatId($phone, '', $body, $at, $deviceId);
         $this->db->prepare('UPDATE whatsapp_chats SET last_message = ?, last_at = ? WHERE id = ? AND last_at <= ?')->execute([$body, $at, $id, $at]);
         if ($this->knownMessage($id, 'out', $body, $at, '') === 0) {
@@ -36,8 +37,10 @@ final class WhatsAppChatService
             $deviceId = $sender['id'];
             $deviceName = $sender['name'];
         }
+        $messages = $this->visibleMessages($phone, is_array($thread['messages'] ?? null) ? $thread['messages'] : []);
+        if ($messages === [] && $this->deletedChatAt($phone) !== '') return;
         $id = $this->chatId($phone, $this->contactName((string) ($chat['name'] ?? '')), '', '', $deviceId);
-        foreach ($thread['messages'] ?? [] as $message) {
+        foreach ($messages as $message) {
             if (!is_array($message)) continue;
             $body = trim((string) ($message['body'] ?? ''));
             $at = trim((string) ($message['created_at'] ?? ''));
@@ -379,6 +382,125 @@ final class WhatsAppChatService
         ];
     }
 
+    /** Remove a whole chat from this desk. Older history is not copied back in; newer replies still arrive. */
+    public function deleteChat(string $phone): array
+    {
+        $key = $this->phoneKey($phone);
+        if ($key === '') throw new InvalidArgumentException('Choose a chat to delete.');
+        $this->db->prepare('DELETE FROM whatsapp_deleted_chats WHERE phone_key = ?')->execute([$key]);
+        $this->db->prepare('INSERT INTO whatsapp_deleted_chats (phone_key, deleted_at) VALUES (?, ?)')->execute([$key, gmdate('c')]);
+        $chats = 0;
+        $messages = 0;
+        foreach ($this->chatIdsFor($phone) as $chatId) {
+            $remove = $this->db->prepare('DELETE FROM whatsapp_chat_messages WHERE chat_id = ?');
+            $remove->execute([$chatId]);
+            $messages += $remove->rowCount();
+            $this->db->prepare('DELETE FROM whatsapp_chats WHERE id = ?')->execute([$chatId]);
+            $chats++;
+        }
+        return ['chats' => $chats, 'messages' => $messages];
+    }
+
+    /** Remove one message from this desk, and keep it from being copied back in. */
+    public function deleteMessage(string $phone, string $direction, string $body, string $at): array
+    {
+        $direction = $direction === 'in' ? 'in' : 'out';
+        $body = trim($body);
+        $moment = strtotime($at);
+        if ($this->phoneKey($phone) === '' || $body === '' || $moment === false) {
+            throw new InvalidArgumentException('Choose a message to delete.');
+        }
+        $removed = 0;
+        foreach ($this->chatIdsFor($phone) as $chatId) {
+            $rows = $this->db->prepare('SELECT id, created_at FROM whatsapp_chat_messages WHERE chat_id = ? AND direction = ? AND body = ?');
+            $rows->execute([$chatId, $direction, $body]);
+            foreach ($rows->fetchAll() as $row) {
+                if (!is_array($row)) continue;
+                $then = strtotime((string) ($row['created_at'] ?? ''));
+                if ($then === false || abs($moment - $then) > 5) continue;
+                $this->db->prepare('DELETE FROM whatsapp_chat_messages WHERE id = ?')->execute([(int) $row['id']]);
+                $removed++;
+            }
+            $this->refreshChat($chatId);
+        }
+        $this->db->prepare('INSERT INTO whatsapp_deleted_messages (phone_key, direction, body, created_at) VALUES (?, ?, ?, ?)')
+            ->execute([$this->phoneKey($phone), $direction, $body, gmdate('c', $moment)]);
+        return ['messages' => $removed];
+    }
+
+    /** Messages from a live or saved thread that were not deleted from this desk. @param array<int, mixed> $messages @return list<array<string, mixed>> */
+    public function visibleMessages(string $phone, array $messages): array
+    {
+        $visible = [];
+        foreach ($messages as $message) {
+            if (!is_array($message)) continue;
+            $direction = ($message['direction'] ?? '') === 'in' ? 'in' : 'out';
+            $body = trim((string) ($message['body'] ?? ''));
+            $at = trim((string) ($message['created_at'] ?? ''));
+            if ($this->isHidden($phone, $direction, $body, $at)) continue;
+            $visible[] = $message;
+        }
+        return $visible;
+    }
+
+    /** Last 10 digits, so the same customer matches with or without a country code. */
+    private function phoneKey(string $phone): string
+    {
+        $digits = $this->digits($phone);
+        return strlen($digits) > 10 ? substr($digits, -10) : $digits;
+    }
+
+    private function deletedChatAt(string $phone): string
+    {
+        $key = $this->phoneKey($phone);
+        if ($key === '') return '';
+        $stmt = $this->db->prepare('SELECT deleted_at FROM whatsapp_deleted_chats WHERE phone_key = ?');
+        $stmt->execute([$key]);
+        return (string) ($stmt->fetchColumn() ?: '');
+    }
+
+    /** True when this message is older than a deleted chat, or was deleted on its own. */
+    private function isHidden(string $phone, string $direction, string $body, string $at): bool
+    {
+        $moment = strtotime($at);
+        if ($moment === false) return false;
+        $deletedAt = $this->deletedChatAt($phone);
+        if ($deletedAt !== '' && $moment <= (int) strtotime($deletedAt)) return true;
+        $stmt = $this->db->prepare('SELECT created_at FROM whatsapp_deleted_messages WHERE phone_key = ? AND direction = ? AND body = ?');
+        $stmt->execute([$this->phoneKey($phone), $direction, $body]);
+        foreach ($stmt->fetchAll() as $row) {
+            $then = strtotime((string) ($row['created_at'] ?? ''));
+            if ($then !== false && abs($moment - $then) <= 5) return true;
+        }
+        return false;
+    }
+
+    /** @return list<int> */
+    private function chatIdsFor(string $phone): array
+    {
+        $digits = $this->digits($phone);
+        $ids = [];
+        foreach ($this->db->query('SELECT id, phone FROM whatsapp_chats')->fetchAll() as $row) {
+            if (is_array($row) && $this->sameDigits($digits, $this->digits((string) ($row['phone'] ?? '')))) {
+                $ids[] = (int) $row['id'];
+            }
+        }
+        return $ids;
+    }
+
+    /** Keep the chat preview in step with its messages; a chat left with no messages is removed. */
+    private function refreshChat(int $chatId): void
+    {
+        $last = $this->db->prepare('SELECT body, created_at FROM whatsapp_chat_messages WHERE chat_id = ? ORDER BY created_at DESC, id DESC LIMIT 1');
+        $last->execute([$chatId]);
+        $row = $last->fetch();
+        if (is_array($row)) {
+            $this->db->prepare('UPDATE whatsapp_chats SET last_message = ?, last_at = ? WHERE id = ?')->execute([(string) $row['body'], (string) $row['created_at'], $chatId]);
+            return;
+        }
+        $this->db->prepare('DELETE FROM whatsapp_chats WHERE id = ?')->execute([$chatId]);
+    }
+
     private function syncSent(): void
     {
         $rows = $this->db->query("SELECT phone, message, created_at, device_id FROM whatsapp_sends WHERE status = 'sent' ORDER BY id ASC")->fetchAll();
@@ -419,6 +541,17 @@ final class WhatsAppChatService
         $this->addColumn('device_name', 'VARCHAR(80) NULL');
         $this->addColumn('external_id', 'VARCHAR(80) NULL');
         $this->addColumn('status', 'VARCHAR(16) NULL');
+        $this->db->exec("CREATE TABLE IF NOT EXISTS whatsapp_deleted_chats (
+            phone_key VARCHAR(16) NOT NULL PRIMARY KEY,
+            deleted_at VARCHAR(32) NOT NULL
+        )");
+        $this->db->exec("CREATE TABLE IF NOT EXISTS whatsapp_deleted_messages (
+            id $id,
+            phone_key VARCHAR(16) NOT NULL,
+            direction VARCHAR(8) NOT NULL,
+            body TEXT NOT NULL,
+            created_at VARCHAR(32) NOT NULL
+        )");
         WhatsAppTables::ensure($this->db);
     }
 

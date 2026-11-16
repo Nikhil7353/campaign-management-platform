@@ -164,10 +164,10 @@
     const mid = $('#sheet-col-mid');
     const next = $('#sheet-col-next');
     const extra = $('#sheet-col-extra');
-    if (idHead) idHead.textContent = wa ? 'ID' : 'ID / agency';
+    if (idHead) idHead.textContent = 'ID';
     if (extra) {
-      extra.textContent = wa ? 'Agency / Name' : 'Email';
-      extra.hidden = !wa;
+      extra.textContent = 'Agency / Name';
+      extra.hidden = false;
     }
     if (mid) mid.textContent = wa ? 'Phone' : 'Email';
     if (next) next.textContent = wa ? 'Message' : 'Subject';
@@ -909,19 +909,11 @@
       });
       chkCell.append(chk);
 
-      // ID / Agency cell in one line
-      const id = element('td', undefined, 'cell-id-agency-td');
-      const idWrap = element('div', undefined, 'cell-id-agency');
-      const idVal = element('span', String(row.record_id || 'Missing ID'), 'sheet-id-val');
+      // ID and agency each get their own column, like the WhatsApp sheet
+      const sheetIdCell = element('td', String(row.record_id || 'Missing ID'), 'cell-sheet-id');
       const agencyName = String(row.values.name || '').trim();
-      if (agencyName) {
-        const dot = element('span', '·', 'sheet-id-dot');
-        const agencyVal = element('span', agencyName, 'sheet-agency-val');
-        idWrap.append(idVal, dot, agencyVal);
-      } else {
-        idWrap.append(idVal);
-      }
-      id.append(idWrap);
+      const sheetAgencyCell = element('td', agencyName || '—', 'cell-sheet-agency');
+      sheetAgencyCell.title = agencyName;
 
       const cleanEmail = String(row.values.email || '').replace(/^[`'"\s\u00a0\u200b]+|[`'"\s\u00a0\u200b]+$/g, '');
       const emailCell = element('td', cleanEmail, 'cell-email');
@@ -993,13 +985,13 @@
       }));
       actions.append(queue);
 
-      tr.append(chkCell, id, emailCell, subjectCell, status, actions);
+      tr.append(chkCell, sheetIdCell, sheetAgencyCell, emailCell, subjectCell, status, actions);
       $('#sheet-rows').append(tr);
     }
 
     if (!filtered.length) {
       const row = element('tr'); const td = cell(records.length ? 'No records match your filters.' : 'No records below the header row.');
-      td.colSpan = 6; td.style.textAlign = 'center'; row.append(td); $('#sheet-rows').append(row);
+      td.colSpan = sheetMode() === 'whatsapp' ? 6 : 7; td.style.textAlign = 'center'; row.append(td); $('#sheet-rows').append(row);
     }
     $('#sheet-page').textContent = `Page ${page + 1} of ${pages}`;
     $('#sheet-range').textContent = `${filtered.length ? page * size + 1 : 0}–${Math.min((page + 1) * size,filtered.length)} of ${filtered.length} records`;

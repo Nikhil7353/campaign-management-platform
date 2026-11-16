@@ -220,7 +220,8 @@
     const oneTick = '<svg class="wa-tick" viewBox="0 0 16 15" aria-hidden="true"><path d="M10.91 3.316l-.478-.372a.365.365 0 0 0-.51.063L4.566 9.88a.32.32 0 0 1-.484.032L1.892 7.77a.366.366 0 0 0-.515.006l-.423.433a.364.364 0 0 0 .006.514l3.255 3.185a.32.32 0 0 0 .484-.033l6.272-8.048a.365.365 0 0 0-.063-.51z"/></svg>';
     const twoTick = '<svg class="wa-tick wa-tick-double" viewBox="0 0 16 15" aria-hidden="true"><path d="M15.01 3.316l-.478-.372a.365.365 0 0 0-.51.063L8.666 9.88a.32.32 0 0 1-.484.032l-.358-.325a.32.32 0 0 0-.484.032l-.378.48a.418.418 0 0 0 .036.54l1.32 1.267a.32.32 0 0 0 .484-.034l6.272-8.048a.366.366 0 0 0-.064-.512zm-4.1 0l-.478-.372a.365.365 0 0 0-.51.063L4.566 9.88a.32.32 0 0 1-.484.032L1.892 7.77a.366.366 0 0 0-.515.006l-.423.433a.364.364 0 0 0 .006.514l3.255 3.185a.32.32 0 0 0 .484-.033l6.272-8.048a.365.365 0 0 0-.063-.51z"/></svg>';
     let lastDay = '';
-    const lines = (data.messages || []).map((message) => {
+    const messages = data.messages || [];
+    const lines = messages.map((message, index) => {
       const side = message.direction === 'out' ? 'out' : 'in';
       let mark = '';
       if (side === 'out') {
@@ -249,6 +250,7 @@
             </p>
           </div>
         </div>
+        <button type="button" class="wa-chat-del-btn" data-action="delete-chat">Delete chat</button>
       </div>
       <div class="wa-chat-stream">${lines || '<p class="muted" style="padding:16px 0;">No messages in this chat.</p>'}</div>
       <form class="wa-chat-compose">
@@ -266,6 +268,13 @@
         <div class="wa-emoji-pop" hidden></div>
       </form>
     `;
+    pane.querySelector('[data-action="delete-chat"]')?.addEventListener('click', () => deleteChat(chat));
+    pane.querySelectorAll('.wa-bubble-del').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        deleteMessage(chat, messages[Number(button.dataset.msg)]);
+      });
+    });
     const form = pane.querySelector('.wa-chat-compose');
     const input = form?.message;
     const pop = form?.querySelector('.wa-emoji-pop');
@@ -309,6 +318,33 @@
         .finally(() => { sending = false; });
     });
     pane.querySelector('.wa-chat-stream')?.scrollTo(0, pane.querySelector('.wa-chat-stream').scrollHeight);
+  }
+
+  async function deleteChat(chat) {
+    if (!chat || !chat.phone) return;
+    if (!window.confirm(`Delete the whole chat with ${displayName(chat)} from this desk? Older messages will not come back.`)) return;
+    try {
+      const result = await api('whatsapp/chats/delete', { method: 'POST', body: JSON.stringify({ phone: chat.phone }) });
+      openId = 0;
+      notice(`Chat deleted (${result.messages || 0} messages removed).`);
+      await loadWaChats();
+    } catch (error) {
+      notice(error.message, true);
+    }
+  }
+
+  async function deleteMessage(chat, message) {
+    if (!chat || !chat.phone || !message) return;
+    if (!window.confirm('Delete this message from this desk?')) return;
+    try {
+      await api('whatsapp/chats/message/delete', {
+        method: 'POST',
+        body: JSON.stringify({ phone: chat.phone, direction: message.direction, body: message.body, created_at: message.created_at })
+      });
+      await openThread(chat.id);
+    } catch (error) {
+      notice(error.message, true);
+    }
   }
 
   function renderEmptyThread() {
