@@ -55,6 +55,7 @@ final class EmailProcessor
 
         $queue = new EmailQueue($this->db);
         try {
+            $email = $this->withReplyContext($email);
             $mailer = $this->mailer;
             if ($mailer === null) {
                 $account = !empty($email['mail_account_id']) ? \App\Services\MailAccountService::getById($this->db, (int) $email['mail_account_id'], true) : null;
@@ -103,6 +104,8 @@ final class EmailProcessor
         }
 
         if (empty($validEmails)) return [];
+
+        $validEmails = array_map(fn(array $email) => $this->withReplyContext($email), $validEmails);
 
         $mailer = $this->mailer;
         if ($mailer === null) {
@@ -166,5 +169,34 @@ final class EmailProcessor
         }
 
         return $finalStatuses;
+    }
+
+    /** Attach In-Reply-To from the linked inbox message when available. */
+    private function withReplyContext(array $email): array
+    {
+        if (!empty($email['in_reply_to'])) {
+            return $email;
+        }
+        $inboxId = (int) ($email['inbox_email_id'] ?? 0);
+        if ($inboxId <= 0) {
+            return $email;
+        }
+        try {
+            $stmt = $this->db->prepare('SELECT message_id, mail_account_id FROM inbox_emails WHERE id = ?');
+            $stmt->execute([$inboxId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$row) {
+                return $email;
+            }
+            $messageId = trim((string) ($row['message_id'] ?? ''));
+            if ($messageId !== '') {
+                $email['in_reply_to'] = $messageId;
+            }
+            if (empty($email['mail_account_id']) && !empty($row['mail_account_id'])) {
+                $email['mail_account_id'] = (int) $row['mail_account_id'];
+            }
+        } catch (\Throwable) {
+        }
+        return $email;
     }
 }

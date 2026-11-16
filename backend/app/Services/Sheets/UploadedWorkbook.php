@@ -14,7 +14,8 @@ final class UploadedWorkbook
     {
         $tabs = UploadReader::read($path, $name);
         $data = json_encode($tabs, JSON_THROW_ON_ERROR);
-        if (strlen($data) > 10 * 1024 * 1024) throw new InvalidArgumentException('Imported data is too large. Split the workbook.');
+        // Stay under MySQL MEDIUMTEXT (~16 MB). Thailand-style sheets land around 11 MB as JSON.
+        if (strlen($data) > 15 * 1024 * 1024) throw new InvalidArgumentException('Imported data is too large. Split the workbook.');
         // Identical file uploads reuse their source, protecting against accidental repeat sends.
         $id = 'upload:' . hash_file('sha256', $path);
         $query = $this->db->prepare('SELECT id FROM uploaded_sheets WHERE id = ?'); $query->execute([$id]);
@@ -29,7 +30,7 @@ final class UploadedWorkbook
         if (!preg_match('/^upload:[a-f0-9]{64}$/D', $id)) throw new InvalidArgumentException('Invalid upload identifier.');
         $tabs = UploadReader::read($path, $name);
         $data = json_encode($tabs, JSON_THROW_ON_ERROR);
-        if (strlen($data) > 10 * 1024 * 1024) throw new InvalidArgumentException('Imported data is too large. Split the workbook.');
+        if (strlen($data) > 15 * 1024 * 1024) throw new InvalidArgumentException('Imported data is too large. Split the workbook.');
         $existing = $this->db->prepare('SELECT id FROM uploaded_sheets WHERE id = ?');
         $existing->execute([$id]);
         if (!$existing->fetchColumn()) throw new InvalidArgumentException('Uploaded workbook not found.');

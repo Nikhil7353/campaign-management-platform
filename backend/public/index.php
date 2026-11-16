@@ -300,6 +300,40 @@ if ($path === '/api/reset-password' && $method === 'POST') {
         respond(['error' => 'Failed to reset administrator password.'], 500);
     }
 }
+// Hostinger can call this on a schedule without a desk login (token required).
+if ($path === '/api/cron/inbox-sync' && $method === 'GET') {
+    $secret = (string) (getenv('CRON_SECRET') ?: '');
+    $token = (string) ($_GET['token'] ?? '');
+    if ($secret === '' || $token === '' || !hash_equals($secret, $token)) {
+        respond(['error' => 'Forbidden.'], 403);
+    }
+    try {
+        $db = Database::connect();
+        Database::migrate($db);
+        $totalNew = 0;
+        $errors = 0;
+        $accounts = MailAccountService::getAll($db, true);
+        if (!empty($accounts)) {
+            foreach ($accounts as $acct) {
+                if (($acct['status'] ?? '') !== 'active') continue;
+                try {
+                    $res = (new ImapClient($db, $acct))->sync(50);
+                    $totalNew += (int) ($res['new_count'] ?? 0);
+                } catch (Throwable $t) {
+                    $errors++;
+                    error_log('Cron inbox sync error for account ' . ($acct['id'] ?? '?') . ': ' . $t->getMessage());
+                }
+            }
+        } else {
+            $res = (new ImapClient($db))->sync(50);
+            $totalNew = (int) ($res['new_count'] ?? 0);
+        }
+        respond(['ok' => true, 'new_count' => $totalNew, 'errors' => $errors, 'synced_at' => gmdate('c')]);
+    } catch (Throwable $e) {
+        error_log('Cron inbox sync failed: ' . $e->getMessage());
+        respond(['error' => 'Inbox sync failed.'], 500);
+    }
+}
 if (empty($_SESSION['authenticated'])) respond(['error' => 'Please sign in.'], 401);
 if ($path === '/api/logout' && $method === 'POST') { $_SESSION = []; session_destroy(); respond(['ok' => true]); }
 try {
@@ -370,7 +404,33 @@ try {
         respond($detail);
     }
     if (preg_match('#^/api/inbox/(\d+)/toggle-read$#', $path, $match) && $method === 'POST') {
-        respond(['ok' => $imap->toggleRead((int) $match[1])]);
+        $raw = file_get_contents('php://input');
+        $toggleInput = is_string($raw) && $raw !== '' ? json_decode($raw, true) : [];
+        $forceRead = is_array($toggleInput) && array_key_exists('is_read', $toggleInput)
+            ? (bool) $toggleInput['is_read']
+            : null;
+        respond(['ok' => $imap->toggleRead((int) $match[1], $forceRead)]);
+    }
+    if (preg_match('#^/api/inbox/(\d+)/archive$#', $path, $match) && $method === 'POST') {
+        respond(['ok' => $imap->archive((int) $match[1])]);
+    }
+    if (preg_match('#^/api/inbox/(\d+)/unarchive$#', $path, $match) && $method === 'POST') {
+        respond(['ok' => $imap->unarchive((int) $match[1])]);
+    }
+    if (preg_match('#^/api/inbox/(\d+)$#', $path, $match) && $method === 'DELETE') {
+        respond(['ok' => $imap->deleteLocal((int) $match[1])]);
+    }
+    if (preg_match('#^/api/inbox/(\d+)/attachments/([A-Za-z0-9_.\-]+)$#', $path, $match) && $method === 'GET') {
+        $file = $imap->attachmentFile((int) $match[1], $match[2]);
+        if (!$file) respond(['error' => 'Attachment not found.'], 404);
+        $pathOnDisk = (string) $file['path'];
+        $name = (string) ($file['name'] ?? 'attachment');
+        $type = (string) ($file['type'] ?? 'application/octet-stream');
+        header('Content-Type: ' . $type);
+        header('Content-Length: ' . (string) filesize($pathOnDisk));
+        header('Content-Disposition: attachment; filename="' . str_replace('"', '', $name) . '"');
+        readfile($pathOnDisk);
+        exit;
     }
     if ($path === '/api/validate-recipient' && $method === 'GET') {
         $email = trim((string) ($_GET['email'] ?? ''));

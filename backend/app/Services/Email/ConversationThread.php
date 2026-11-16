@@ -139,7 +139,7 @@ final class ConversationThread
                 'quoted_history' => $split['quoted'],
                 'html_body' => $inbox['html_body'] ?? null,
                 'snippet' => $snippet,
-                'attachments' => [],
+                'attachments' => self::safeAttachments($inbox['attachments'] ?? null),
                 'status' => 'bounced',
                 'is_read' => (int) $inbox['is_read'],
                 'created_at' => $timestamp,
@@ -149,6 +149,23 @@ final class ConversationThread
         }
 
         return self::collectThreadMessages($db, $senderEmail, $normSub, null, $inboxId);
+    }
+
+    private static function safeAttachments(mixed $raw): array
+    {
+        $atts = is_string($raw) ? (json_decode($raw, true) ?: []) : (is_array($raw) ? $raw : []);
+        if (!is_array($atts)) return [];
+        $out = [];
+        foreach ($atts as $att) {
+            if (empty($att['id']) || empty($att['name'])) continue;
+            $out[] = [
+                'id' => (string) $att['id'],
+                'name' => (string) $att['name'],
+                'size' => (int) ($att['size'] ?? 0),
+                'type' => (string) ($att['type'] ?? 'application/octet-stream'),
+            ];
+        }
+        return $out;
     }
 
     /**
@@ -198,7 +215,7 @@ final class ConversationThread
         }
 
         // 2. Fetch incoming emails from this sender
-        $stmt = $db->prepare("SELECT id, uid, from_name, from_email, to_email, subject, body, html_body, snippet, is_read, received_at, created_at FROM inbox_emails WHERE LOWER(from_email) = ? ORDER BY id ASC");
+        $stmt = $db->prepare("SELECT id, uid, from_name, from_email, to_email, subject, body, html_body, snippet, attachments, is_read, received_at, created_at FROM inbox_emails WHERE LOWER(from_email) = ? AND archived_at IS NULL ORDER BY id ASC");
         $stmt->execute([$contactEmail]);
         $inList = $stmt->fetchAll();
 
@@ -225,7 +242,7 @@ final class ConversationThread
                     'quoted_history' => $split['quoted'],
                     'html_body' => $row['html_body'] ?? null,
                     'snippet' => $snippet,
-                    'attachments' => [],
+                    'attachments' => self::safeAttachments($row['attachments'] ?? null),
                     'status' => 'received',
                     'is_read' => (int) $row['is_read'],
                     'created_at' => $timestamp,

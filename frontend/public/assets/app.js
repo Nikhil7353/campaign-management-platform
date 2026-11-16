@@ -65,7 +65,12 @@ function view(name) {
   if (name === 'wa-sent') window.loadWaSent?.();
   if (name === 'wa-overview') window.loadWaOverview?.();
   if (name === 'wa-chats') window.loadWaChats?.();
-  if (name === 'inbox') window.loadInbox?.();
+  if (name === 'inbox') {
+    window.loadInbox?.();
+    window.startInboxAutoSync?.();
+  } else {
+    window.stopInboxAutoSync?.();
+  }
   if (name === 'sent') loadSentPage?.();
   if (name === 'mail-accounts') loadMailAccounts?.();
   if (name === 'compose') prepareCompose();
@@ -395,8 +400,8 @@ function createExpandedMessageElement(msg, senderName, av, initial, dateFormatte
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
           </div>
           <div class="bounce-report-summary">
-            <h4>Email Delivery Failure Notification</h4>
-            <p>The recipient's mail server rejected or could not deliver the message sent from your workspace.</p>
+            <h4>Failed delivery</h4>
+            <p>This email could not be delivered. The recipient's mail server rejected it or sent it back.</p>
           </div>
         </div>
         <div class="bounce-report-meta">
@@ -454,6 +459,33 @@ function createExpandedMessageElement(msg, senderName, av, initial, dateFormatte
   }
 
   renderBody();
+
+  const atts = Array.isArray(msg.attachments) ? msg.attachments : [];
+  if (atts.length) {
+    const wrap = document.createElement('div');
+    wrap.className = 'email-attachments-list';
+    wrap.style.marginTop = '14px';
+    wrap.innerHTML = atts.map((att) => {
+      const href = msg.type === 'incoming'
+        ? `/api/inbox/${encodeURIComponent(msg.id)}/attachments/${encodeURIComponent(att.id)}`
+        : '';
+      const name = escapeHtml(att.name || 'File');
+      const size = typeof formatBytes === 'function' ? formatBytes(att.size || 0) : '';
+      if (href) {
+        return `<a class="attachment-chip" href="${href}" target="_blank" rel="noopener" download="${name}">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span class="attachment-name" title="${name}">${name}</span>
+          <span class="attachment-size">${escapeHtml(size)}</span>
+        </a>`;
+      }
+      return `<div class="attachment-chip">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <span class="attachment-name" title="${name}">${name}</span>
+        <span class="attachment-size">${escapeHtml(size)}</span>
+      </div>`;
+    }).join('');
+    el.querySelector('.gmail-msg-body')?.append(wrap);
+  }
 
   const toggleBtn = el.querySelector('.thread-format-toggle-btn');
   if (toggleBtn) {
@@ -563,6 +595,25 @@ async function openThreadReader(id, origin = 'inbox') {
     const endpoint = origin === 'inbox' ? `inbox/${id}` : `emails/${id}`;
     const res = await api(endpoint);
     const email = res.email || res;
+    window.currentThreadEmail = email;
+    const unreadBtn = $('#thread-unread-btn');
+    const archiveBtn = $('#thread-archive-btn');
+    const deleteBtn = $('#thread-delete-btn');
+    if (unreadBtn) unreadBtn.hidden = origin !== 'inbox';
+    if (archiveBtn) {
+      archiveBtn.hidden = origin !== 'inbox';
+      const label = archiveBtn.querySelector('span');
+      if (email.is_archived) {
+        if (label) label.textContent = 'Move to Inbox';
+        archiveBtn.title = 'Move this message back to Inbox';
+        archiveBtn.dataset.mode = 'unarchive';
+      } else {
+        if (label) label.textContent = 'Archive';
+        archiveBtn.title = 'Archive this message';
+        archiveBtn.dataset.mode = 'archive';
+      }
+    }
+    if (deleteBtn) deleteBtn.hidden = origin !== 'inbox';
     const thread = res.thread && res.thread.length ? res.thread : [
       {
         id: email.id,
@@ -626,6 +677,50 @@ $('#thread-back-btn')?.addEventListener('click', () => {
   view(window.currentThreadOrigin || 'inbox');
 });
 
+$('#thread-unread-btn')?.addEventListener('click', async () => {
+  if (window.currentThreadOrigin !== 'inbox' || !window.currentThreadId) {
+    notice('Mark unread is only available for Inbox messages.', true);
+    return;
+  }
+  try {
+    await api(`inbox/${window.currentThreadId}/toggle-read`, {
+      method: 'POST',
+      body: JSON.stringify({ is_read: false })
+    });
+    notice('Marked as unread.');
+    view('inbox');
+    await window.loadInbox?.();
+  } catch (err) {
+    notice(err.message || 'Could not mark as unread.', true);
+  }
+});
+
+$('#thread-archive-btn')?.addEventListener('click', async () => {
+  if (window.currentThreadOrigin !== 'inbox' || !window.currentThreadId) return;
+  const mode = $('#thread-archive-btn')?.dataset.mode || 'archive';
+  try {
+    await api(`inbox/${window.currentThreadId}/${mode === 'unarchive' ? 'unarchive' : 'archive'}`, { method: 'POST' });
+    notice(mode === 'unarchive' ? 'Moved back to Inbox.' : 'Archived.');
+    view('inbox');
+    await window.loadInbox?.();
+  } catch (err) {
+    notice(err.message || 'Could not update message.', true);
+  }
+});
+
+$('#thread-delete-btn')?.addEventListener('click', async () => {
+  if (window.currentThreadOrigin !== 'inbox' || !window.currentThreadId) return;
+  if (!confirm('Remove this message from the desk? It will stay on the mail server, but will not come back on sync.')) return;
+  try {
+    await api(`inbox/${window.currentThreadId}`, { method: 'DELETE' });
+    notice('Removed from desk.');
+    view('inbox');
+    await window.loadInbox?.();
+  } catch (err) {
+    notice(err.message || 'Could not delete message.', true);
+  }
+});
+
 $('#thread-print-btn')?.addEventListener('click', () => {
   window.print();
 });
@@ -682,15 +777,24 @@ $('#thread-composer-send-btn')?.addEventListener('click', async () => {
   sendBtn.innerHTML = 'Sending…';
 
   try {
+    const source = window.currentThreadEmail || {};
+    const payload = {
+      recipient: counterpart,
+      subject: reSubject,
+      body: text,
+      idempotency_key: crypto.randomUUID(),
+      send_now: true
+    };
+    if (window.currentThreadOrigin === 'inbox') {
+      payload.inbox_email_id = Number(window.currentThreadId) || undefined;
+      if (source.mail_account_id) payload.mail_account_id = Number(source.mail_account_id);
+      if (source.message_id) payload.in_reply_to = String(source.message_id);
+    } else if (source.mail_account_id) {
+      payload.mail_account_id = Number(source.mail_account_id);
+    }
     await api('emails', {
       method: 'POST',
-      body: JSON.stringify({
-        recipient: counterpart,
-        subject: reSubject,
-        body: text,
-        idempotency_key: crypto.randomUUID(),
-        send_now: true
-      })
+      body: JSON.stringify(payload)
     });
     notice('Reply sent successfully via Hostinger SMTP!');
     if (textarea) textarea.value = '';
@@ -1256,7 +1360,7 @@ $('#overview-sync-btn')?.addEventListener('click', async () => {
     notice('Failed to sync inbox: ' + err.message, true);
   } finally {
     btn.disabled = false;
-    if (label) label.textContent = 'Sync Inbox';
+    if (label) label.textContent = 'Sync now';
   }
 });
 let currentSession = null;

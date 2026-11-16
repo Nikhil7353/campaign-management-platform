@@ -19,9 +19,17 @@ This work is local only. Do not deploy it, and do not commit it, until asked. Do
 - Chats has a sending-phone choice. **All** shows every campaign chat. Choosing one phone shows only the customers that phone messaged, and the open thread is that phone's conversation.
 - Opening a chat saves that thread on this desk, including the customer's replies. If the inbox cannot be read later, the saved messages still show.
 
-## Still to build
+## Sending a sheet
 
-Send that sheet's rows from the phones selected in the dropdown. The database for that send is in place. The rows are not queued yet.
+**Send all N ready** opens a popup before anything goes out. It shows the start time, the gap, each ready phone with how many rows it gets and its first and last time, and the count for each day. Cancel leaves every row Not sent.
+
+- Rows stay in sheet order and go to the phone with the earliest free time. Three phones and 19 rows are 7, 6, and 6.
+- Each phone sends at most 20 a day. Rows past that move to the next day at the start time.
+- Start is a day and a time. If that time has already passed today, sending starts now.
+- Confirm saves each row as Waiting with its phone and its time. The progress popup shows Sent, Waiting, and Failed for each phone, the next time, and the latest rows.
+- Each phone sends one row at a time, never closer than the gap. A phone that is not ready keeps its rows Waiting until it is ready again.
+- The open desk sends due rows every 20 seconds. `backend/scripts/cron/send-whatsapp.php` does the same from a cron job, so rows keep going with the desk closed. No cron job is installed yet.
+- This has not been tried with a real send yet.
 
 ## Dashboard device filter
 

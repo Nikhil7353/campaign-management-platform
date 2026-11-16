@@ -24,11 +24,11 @@ final class DashboardService
 
         $counts = ['pending' => 0, 'sent' => 0, 'failed' => 0, 'dry_run' => 0, 'processing' => 0];
         $emailSql = 'SELECT status, recipient, created_at FROM emails';
-        $inboxSql = 'SELECT id, from_name, from_email, subject, snippet, is_read, received_at, created_at FROM inbox_emails';
+        $inboxSql = 'SELECT id, from_name, from_email, subject, snippet, is_read, received_at, created_at FROM inbox_emails WHERE archived_at IS NULL';
         $params = [];
         if ($accountId !== null && $accountId > 0) {
             $emailSql .= ' WHERE mail_account_id = ?';
-            $inboxSql .= ' WHERE mail_account_id = ?';
+            $inboxSql .= ' AND mail_account_id = ?';
             $params[] = $accountId;
         }
 

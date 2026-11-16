@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace App\Services\Email;
 
+use App\Services\MailAccountService;
 use PDO;
 use RuntimeException;
 use InvalidArgumentException;
@@ -49,8 +50,13 @@ final class ImapClient
         try {
             $this->sendCommand($connection, "SELECT INBOX");
 
-            // Find max UID already in database
-            $stmt = $this->db->query("SELECT MAX(uid) AS max_uid FROM inbox_emails");
+            // Per-mailbox cursor so one account's UIDs never block another.
+            if ($this->accountId) {
+                $stmt = $this->db->prepare('SELECT MAX(uid) AS max_uid FROM inbox_emails WHERE mail_account_id = ?');
+                $stmt->execute([(int) $this->accountId]);
+            } else {
+                $stmt = $this->db->query('SELECT MAX(uid) AS max_uid FROM inbox_emails');
+            }
             $maxUid = (int) ($stmt->fetchColumn() ?: 0);
 
             $searchRes = $this->sendCommand($connection, "UID SEARCH ALL");
@@ -169,6 +175,7 @@ final class ImapClient
             'body' => $body,
             'html_body' => $htmlBody,
             'snippet' => $snippet,
+            'raw_attachments' => $mime['attachments'] ?? [],
             'received_at' => $date,
             'created_at' => gmdate('c')
         ];
@@ -176,14 +183,23 @@ final class ImapClient
 
     private function saveEmail(array $email): void
     {
+        if ($this->isSuppressedUid((int) $email['uid'])) {
+            return;
+        }
+        $attachmentsJson = null;
+        $saved = $this->persistAttachments($email['raw_attachments'] ?? [], (int) $email['uid']);
+        if ($saved !== []) {
+            $attachmentsJson = json_encode($saved, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        }
         $stmt = $this->db->prepare("
-            INSERT INTO inbox_emails (mail_account_id, uid, message_id, from_name, from_email, to_email, subject, body, html_body, snippet, is_read, received_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            INSERT INTO inbox_emails (mail_account_id, uid, message_id, from_name, from_email, to_email, subject, body, html_body, snippet, attachments, is_read, received_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
             ON DUPLICATE KEY UPDATE
                 subject = VALUES(subject),
                 body = VALUES(body),
                 html_body = VALUES(html_body),
-                snippet = VALUES(snippet)
+                snippet = VALUES(snippet),
+                attachments = COALESCE(VALUES(attachments), attachments)
         ");
         $stmt->execute([
             $this->accountId,
@@ -196,6 +212,7 @@ final class ImapClient
             $email['body'],
             $email['html_body'] ?? '',
             $email['snippet'],
+            $attachmentsJson,
             $email['received_at'],
             $email['created_at']
         ]);
@@ -299,8 +316,14 @@ final class ImapClient
 
         if ($status === 'unread') {
             $conditions[] = "is_read = 0";
+            $conditions[] = "archived_at IS NULL";
         } elseif ($status === 'read') {
             $conditions[] = "is_read = 1";
+            $conditions[] = "archived_at IS NULL";
+        } elseif ($status === 'archived') {
+            $conditions[] = "archived_at IS NOT NULL";
+        } else {
+            $conditions[] = "archived_at IS NULL";
         }
 
         $from = trim((string) ($query['from'] ?? ''));
@@ -342,10 +365,11 @@ final class ImapClient
             $baseParams[] = strtolower($toEmail);
         }
 
-        $baseWhere = $baseConditions ? 'WHERE ' . implode(' AND ', $baseConditions) : '';
-        $baseAnd = $baseConditions ? ' AND ' . implode(' AND ', $baseConditions) : '';
+        $baseConditions[] = 'archived_at IS NULL';
+        $baseWhere = 'WHERE ' . implode(' AND ', $baseConditions);
+        $baseAnd = ' AND ' . implode(' AND ', $baseConditions);
 
-        // Category counts
+        // Category counts (active inbox only)
         $stmtAll = $this->db->prepare("SELECT COUNT(*) FROM inbox_emails {$baseWhere}");
         $stmtAll->execute($baseParams);
         $totalAll = (int) $stmtAll->fetchColumn();
@@ -367,7 +391,7 @@ final class ImapClient
         $total = (int) $countStmt->fetchColumn();
 
         // Calculate unread count strictly within the scoped mailbox criteria
-        $unreadConditions = ["is_read = 0"];
+        $unreadConditions = ["is_read = 0", "archived_at IS NULL"];
         $unreadParams = [];
         if ($category === 'primary') {
             $unreadConditions[] = "NOT {$bounceSql}";
@@ -398,11 +422,13 @@ final class ImapClient
         $page = min($page, $pages);
         $offset = ($page - 1) * $size;
 
-        $selectSql = "SELECT i.id, i.mail_account_id, i.uid, i.message_id, i.from_name, i.from_email, i.to_email, i.subject, i.body, i.snippet, i.is_read, i.received_at, i.created_at,
+        // Qualify columns for aliased FROM inbox_emails i
+        $aliasedWhere = $where !== '' ? preg_replace('/\b(is_read|archived_at|mail_account_id|to_email|from_name|from_email|subject|snippet|received_at)\b/', 'i.$1', $where) : '';
+        $selectSql = "SELECT i.id, i.mail_account_id, i.uid, i.message_id, i.from_name, i.from_email, i.to_email, i.subject, i.body, i.snippet, i.is_read, i.received_at, i.created_at, i.attachments, i.archived_at,
                              m.name AS mailbox_name, m.email AS mailbox_email
                       FROM inbox_emails i
                       LEFT JOIN mail_accounts m ON i.mail_account_id = m.id
-                      {$where}
+                      {$aliasedWhere}
                       ORDER BY i.received_at DESC, i.id DESC
                       LIMIT {$size} OFFSET {$offset}";
         $stmt = $this->db->prepare($selectSql);
@@ -431,12 +457,16 @@ final class ImapClient
         foreach ($emails as &$em) {
             $em['thread_count'] = $threadCounts[(int) $em['id']] ?? 1;
             $em['is_bounce'] = self::isBounceEmail($em['from_name'] ?? '', $em['from_email'] ?? '', $em['subject'] ?? '');
+            $atts = !empty($em['attachments']) ? (json_decode((string) $em['attachments'], true) ?: []) : [];
+            $em['has_attachments'] = is_array($atts) && count($atts) > 0;
+            $em['is_archived'] = !empty($em['archived_at']);
+            unset($em['attachments']);
         }
 
         return [
             'emails' => $emails,
             'unread_count' => $unreadCount,
-            'global_unread_count' => (int) ($this->db->query("SELECT COUNT(*) FROM inbox_emails WHERE is_read = 0")->fetchColumn() ?: 0),
+            'global_unread_count' => (int) ($this->db->query("SELECT COUNT(*) FROM inbox_emails WHERE is_read = 0 AND archived_at IS NULL")->fetchColumn() ?: 0),
             'category' => $category,
             'category_counts' => [
                 'primary' => $totalPrimary,
@@ -467,10 +497,19 @@ final class ImapClient
         // Recover a delivery report when only the MIME wrapper was stored, and fill in HTML when it is missing.
         if (!empty($email['uid']) && (empty($email['html_body']) || self::isMimeStub((string) ($email['body'] ?? '')))) {
             try {
-                $conn = $this->connect();
-                $this->sendCommand($conn, "SELECT INBOX");
-                $fetched = $this->fetchMessage($conn, (int) $email['uid']);
-                $this->close($conn);
+                // Re-fetch from the mailbox that owns this row, not always the default IMAP account.
+                $fetcher = $this;
+                $ownerId = (int) ($email['mail_account_id'] ?? 0);
+                if ($ownerId > 0 && $ownerId !== (int) ($this->accountId ?? 0)) {
+                    $owner = MailAccountService::getById($this->db, $ownerId, true);
+                    if ($owner && !empty($owner['imap_user'])) {
+                        $fetcher = new self($this->db, $owner);
+                    }
+                }
+                $conn = $fetcher->connect();
+                $fetcher->sendCommand($conn, "SELECT INBOX");
+                $fetched = $fetcher->fetchMessage($conn, (int) $email['uid']);
+                $fetcher->close($conn);
                 if ($fetched) {
                     $fetchedBody = trim((string) ($fetched['body'] ?? ''));
                     $fetchedHtml = (string) ($fetched['html_body'] ?? '');
@@ -531,12 +570,29 @@ final class ImapClient
             $email['is_read'] = 1;
         }
 
+        $safeAttachments = [];
+        $atts = !empty($email['attachments']) ? (json_decode((string) $email['attachments'], true) ?: []) : [];
+        if (is_array($atts)) {
+            foreach ($atts as $att) {
+                if (empty($att['id']) || empty($att['name'])) continue;
+                $safeAttachments[] = [
+                    'id' => (string) $att['id'],
+                    'name' => (string) $att['name'],
+                    'size' => (int) ($att['size'] ?? 0),
+                    'type' => (string) ($att['type'] ?? 'application/octet-stream'),
+                ];
+            }
+        }
+
         foreach ($email as $k => $v) {
+            if ($k === 'attachments') continue;
             if (is_string($v)) {
                 $email[$k] = function_exists('mb_scrub') ? mb_scrub($v, 'UTF-8') : @mb_convert_encoding($v, 'UTF-8', 'UTF-8');
             }
         }
 
+        $email['attachments'] = $safeAttachments;
+        $email['is_archived'] = !empty($email['archived_at']);
         $email['thread'] = ConversationThread::getThreadForInbox($this->db, $id);
         return $email;
     }
@@ -767,6 +823,7 @@ final class ImapClient
 
         $plainText = '';
         $htmlText = '';
+        $attachments = [];
 
         if (!empty($boundaries)) {
             usort($boundaries, fn($a, $b) => strlen($b) <=> strlen($a));
@@ -808,8 +865,31 @@ final class ImapClient
                 if ($encoding === 'quoted-printable') {
                     $pBody = quoted_printable_decode($pBody);
                 } elseif ($encoding === 'base64') {
-                    $decoded = base64_decode($pBody);
+                    $decoded = base64_decode($pBody, true);
                     if ($decoded !== false) $pBody = $decoded;
+                }
+
+                $partType = '';
+                if (preg_match('/content-type:\s*([^;\s]+)/i', $pHeader, $tm)) {
+                    $partType = strtolower(trim($tm[1]));
+                }
+                $filename = self::attachmentFilename($pHeader);
+                $disposition = '';
+                if (preg_match('/content-disposition:\s*([a-z]+)/i', $pHeader, $dm)) {
+                    $disposition = strtolower(trim($dm[1]));
+                }
+                $looksBinary = $filename !== '' && $partType !== '' && !str_starts_with($partType, 'text/') && !str_starts_with($partType, 'multipart/');
+                if (($disposition === 'attachment' || $looksBinary) && $filename !== '' && count($attachments) < 5) {
+                    $size = strlen($pBody);
+                    if ($size > 0 && $size <= 10 * 1024 * 1024 && self::safeAttachmentName($filename) !== '') {
+                        $attachments[] = [
+                            'name' => self::safeAttachmentName($filename),
+                            'type' => $partType !== '' ? $partType : 'application/octet-stream',
+                            'bytes' => $pBody,
+                            'size' => $size,
+                        ];
+                    }
+                    continue;
                 }
 
                 // Detect charset and convert to valid UTF-8
@@ -904,8 +984,146 @@ final class ImapClient
         $final = trim($final);
         return [
             'plain' => function_exists('mb_scrub') ? mb_scrub($final, 'UTF-8') : @mb_convert_encoding($final, 'UTF-8', 'UTF-8'),
-            'html' => function_exists('mb_scrub') ? mb_scrub(trim($htmlText), 'UTF-8') : @mb_convert_encoding(trim($htmlText), 'UTF-8', 'UTF-8')
+            'html' => function_exists('mb_scrub') ? mb_scrub(trim($htmlText), 'UTF-8') : @mb_convert_encoding(trim($htmlText), 'UTF-8', 'UTF-8'),
+            'attachments' => $attachments,
         ];
+    }
+
+    private static function attachmentFilename(string $header): string
+    {
+        $decode = static function (string $text): string {
+            if (!str_contains($text, '=?')) return $text;
+            if (function_exists('mb_decode_mime_header')) return mb_decode_mime_header($text);
+            if (function_exists('iconv_mime_decode')) {
+                return (string) iconv_mime_decode($text, ICONV_MIME_DECODE_CONTINUE_ON_ERROR, 'UTF-8');
+            }
+            return $text;
+        };
+        if (preg_match("/filename\*=(?:UTF-8''|utf-8'')([^;\r\n]+)/i", $header, $m)) {
+            return trim(rawurldecode(trim($m[1], " \t\"'")));
+        }
+        if (preg_match('/filename="([^"]+)"/i', $header, $m)) {
+            return trim($decode($m[1]));
+        }
+        if (preg_match('/filename=([^;\r\n]+)/i', $header, $m)) {
+            return trim($decode(trim($m[1], " \t\"'")));
+        }
+        return '';
+    }
+
+    private static function safeAttachmentName(string $name): string
+    {
+        $name = basename(str_replace(["\0", '\\'], '', $name));
+        $name = preg_replace('/[^\w.\- ()\[\]]+/u', '_', $name) ?: '';
+        $name = trim($name, '._ ');
+        if ($name === '' || strlen($name) > 180) return '';
+        $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+        $blocked = ['php', 'phtml', 'php3', 'php4', 'php5', 'phar', 'exe', 'bat', 'cmd', 'sh', 'js', 'htm', 'html'];
+        if (in_array($ext, $blocked, true)) return '';
+        return $name;
+    }
+
+    /** Write decoded attachment bytes to disk and return metadata JSON-ready rows. */
+    private function persistAttachments(array $rawAttachments, int $uid): array
+    {
+        if ($rawAttachments === []) return [];
+        $dir = dirname(__DIR__, 3) . '/storage/app/attachments/inbound';
+        if (!is_dir($dir) && !mkdir($dir, 0755, true) && !is_dir($dir)) {
+            return [];
+        }
+        $saved = [];
+        foreach ($rawAttachments as $att) {
+            $name = self::safeAttachmentName((string) ($att['name'] ?? ''));
+            $bytes = (string) ($att['bytes'] ?? '');
+            if ($name === '' || $bytes === '') continue;
+            $id = bin2hex(random_bytes(8)) . '_' . preg_replace('/[^\w.\-]+/', '_', $name);
+            $path = $dir . '/' . $id;
+            if (@file_put_contents($path, $bytes) === false) continue;
+            $saved[] = [
+                'id' => $id,
+                'name' => $name,
+                'size' => strlen($bytes),
+                'type' => (string) ($att['type'] ?? 'application/octet-stream'),
+                'path' => $path,
+            ];
+        }
+        return $saved;
+    }
+
+    private function isSuppressedUid(int $uid): bool
+    {
+        if (!$this->accountId) return false;
+        try {
+            $stmt = $this->db->prepare('SELECT 1 FROM inbox_suppressed_uids WHERE mail_account_id = ? AND uid = ? LIMIT 1');
+            $stmt->execute([(int) $this->accountId, $uid]);
+            return (bool) $stmt->fetchColumn();
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    public function archive(int $id): bool
+    {
+        $stmt = $this->db->prepare('UPDATE inbox_emails SET archived_at = ? WHERE id = ? AND archived_at IS NULL');
+        $stmt->execute([gmdate('c'), $id]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public function unarchive(int $id): bool
+    {
+        $stmt = $this->db->prepare('UPDATE inbox_emails SET archived_at = NULL WHERE id = ?');
+        $stmt->execute([$id]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public function deleteLocal(int $id): bool
+    {
+        $stmt = $this->db->prepare('SELECT id, mail_account_id, uid, attachments FROM inbox_emails WHERE id = ?');
+        $stmt->execute([$id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) return false;
+
+        $atts = !empty($row['attachments']) ? (json_decode((string) $row['attachments'], true) ?: []) : [];
+        foreach ($atts as $att) {
+            $path = (string) ($att['path'] ?? '');
+            if ($path !== '' && is_file($path)) {
+                @unlink($path);
+            }
+        }
+
+        $accountId = (int) ($row['mail_account_id'] ?? 0);
+        $uid = (int) ($row['uid'] ?? 0);
+        if ($accountId > 0 && $uid > 0) {
+            try {
+                $this->db->prepare('INSERT IGNORE INTO inbox_suppressed_uids (mail_account_id, uid, created_at) VALUES (?, ?, ?)')
+                    ->execute([$accountId, $uid, gmdate('c')]);
+            } catch (\Throwable) {
+                try {
+                    $this->db->prepare('INSERT OR IGNORE INTO inbox_suppressed_uids (mail_account_id, uid, created_at) VALUES (?, ?, ?)')
+                        ->execute([$accountId, $uid, gmdate('c')]);
+                } catch (\Throwable) {}
+            }
+        }
+
+        $del = $this->db->prepare('DELETE FROM inbox_emails WHERE id = ?');
+        $del->execute([$id]);
+        return $del->rowCount() > 0;
+    }
+
+    public function attachmentFile(int $id, string $fileId): ?array
+    {
+        $stmt = $this->db->prepare('SELECT attachments FROM inbox_emails WHERE id = ?');
+        $stmt->execute([$id]);
+        $raw = $stmt->fetchColumn();
+        if (!$raw) return null;
+        $atts = json_decode((string) $raw, true);
+        if (!is_array($atts)) return null;
+        foreach ($atts as $att) {
+            if (($att['id'] ?? '') === $fileId && !empty($att['path']) && is_file($att['path'])) {
+                return $att;
+            }
+        }
+        return null;
     }
 }
 

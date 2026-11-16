@@ -259,9 +259,12 @@ final class WhatsAppSheetService
             ->execute(['pick', $clean[0], json_encode(array_values($clean)), $id]);
     }
 
-    public function setSchedule(int $id, string $startDate, ?int $delayMinutes): void
+    public function setSchedule(int $id, string $startDate, ?int $delayMinutes, string $startTime = ''): void
     {
         $this->source($id);
+        if ($startTime !== '' && !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $startTime)) {
+            throw new InvalidArgumentException('Choose the time the first message goes.');
+        }
         if ($startDate !== '') {
             $parsed = \DateTimeImmutable::createFromFormat('!Y-m-d', $startDate);
             $errors = \DateTimeImmutable::getLastErrors() ?: ['warning_count' => 0, 'error_count' => 0];
@@ -272,8 +275,8 @@ final class WhatsAppSheetService
         if ($delayMinutes !== null && ($delayMinutes < 1 || $delayMinutes > 30)) {
             throw new InvalidArgumentException('Set the gap from 1 to 30 minutes.');
         }
-        $this->db->prepare('UPDATE whatsapp_sheet_sources SET start_date = ?, delay_minutes = ? WHERE id = ?')
-            ->execute([$startDate !== '' ? $startDate : null, $delayMinutes, $id]);
+        $this->db->prepare('UPDATE whatsapp_sheet_sources SET start_date = ?, start_time = ?, delay_minutes = ? WHERE id = ?')
+            ->execute([$startDate !== '' ? $startDate : null, $startTime !== '' ? $startTime : null, $delayMinutes, $id]);
     }
 
     private function ensure(): void
@@ -295,6 +298,7 @@ final class WhatsAppSheetService
         $this->addColumn('device_ids', 'TEXT NULL');
         $this->addColumn('sender_mode', 'VARCHAR(8) NULL');
         $this->addColumn('start_date', 'VARCHAR(10) NULL');
+        $this->addColumn('start_time', 'VARCHAR(5) NULL');
         $this->addColumn('delay_minutes', 'INTEGER NULL');
     }
 

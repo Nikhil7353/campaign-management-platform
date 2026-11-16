@@ -58,7 +58,7 @@ CREATE TABLE `inbox_emails` (
   `received_at` VARCHAR(64) NOT NULL,
   `created_at` VARCHAR(32) NOT NULL,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_inbox_uid` (`uid`),
+  UNIQUE KEY `uniq_inbox_account_uid` (`mail_account_id`, `uid`),
   KEY `idx_inbox_from_email` (`from_email`),
   KEY `idx_inbox_is_read` (`is_read`),
   KEY `idx_inbox_received_at` (`received_at`)

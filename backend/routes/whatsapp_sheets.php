@@ -5,6 +5,7 @@ use App\Services\Sheets\SheetService;
 use App\Services\Sheets\UploadedWorkbook;
 use App\Services\Sheets\WhatsAppSheetService;
 use App\Services\WhatsApp\DeviceLink;
+use App\Services\WhatsApp\WhatsAppQueue;
 
 $google = new GoogleClient($db);
 $uploads = new UploadedWorkbook($db);
@@ -17,11 +18,25 @@ try {
     if (!is_array($input)) throw new InvalidArgumentException('Invalid request.');
     if ($path === '/api/whatsapp/sheets' && $method === 'GET') respond(['sources' => $whatsappSheets->sources()]);
     if ($path === '/api/whatsapp/sheets' && $method === 'POST') respond(['id' => $whatsappSheets->save($input)], 201);
-    if (preg_match('#^/api/whatsapp/sheets/(\d+)(?:/(mapping|edit|sender|schedule))?$#', $path, $matches)) {
+    if ($path === '/api/whatsapp/sheets/run' && $method === 'POST') {
+        respond((new WhatsAppQueue($db, new DeviceLink($db)))->run());
+    }
+    if (preg_match('#^/api/whatsapp/sheets/(\d+)(?:/(mapping|edit|sender|schedule|plan|queue|progress))?$#', $path, $matches)) {
         $sourceId = (int) $matches[1];
         $action = $matches[2] ?? '';
         if ($method === 'DELETE' && $action === '') { $whatsappSheets->delete($sourceId); respond(['ok' => true]); }
-        if ($method === 'GET' && $action === '') respond($whatsappSheets->preview($sourceId));
+        if ($method === 'GET' && $action === '') {
+            $preview = $whatsappSheets->preview($sourceId);
+            $states = (new WhatsAppQueue($db, new DeviceLink($db)))->statuses($sourceId);
+            foreach ($preview['records'] as &$record) {
+                $record['send_status'] = $states[(string) $record['record_id']] ?? 'not_queued';
+            }
+            unset($record);
+            respond($preview);
+        }
+        if ($method === 'POST' && $action === 'plan') respond((new WhatsAppQueue($db, new DeviceLink($db), $whatsappSheets))->plan($sourceId));
+        if ($method === 'POST' && $action === 'queue') respond((new WhatsAppQueue($db, new DeviceLink($db), $whatsappSheets))->queue($sourceId));
+        if ($method === 'GET' && $action === 'progress') respond((new WhatsAppQueue($db, new DeviceLink($db)))->progress($sourceId));
         if ($method === 'POST' && $action === 'mapping') respond(['id' => $whatsappSheets->save($input, $sourceId)]);
         if ($method === 'POST' && $action === 'edit') { $whatsappSheets->edit($sourceId, $input); respond(['ok' => true]); }
         if ($method === 'POST' && $action === 'sender') {
@@ -54,7 +69,7 @@ try {
             $startDate = trim((string) ($input['start_date'] ?? ''));
             $delay = $input['delay_minutes'] ?? null;
             $delayMinutes = ($delay === null || $delay === '') ? null : (int) $delay;
-            $whatsappSheets->setSchedule($sourceId, $startDate, $delayMinutes);
+            $whatsappSheets->setSchedule($sourceId, $startDate, $delayMinutes, trim((string) ($input['start_time'] ?? '')));
             respond(['ok' => true]);
         }
     }

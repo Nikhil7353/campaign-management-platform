@@ -22,6 +22,8 @@ final class WhatsAppTables
             updated_at VARCHAR(32) NOT NULL
         )");
         self::addColumn($db, 'whatsapp_sends', 'due_at', 'VARCHAR(32) NULL');
+        self::addColumn($db, 'whatsapp_sends', 'source_id', 'INTEGER NULL');
+        self::addColumn($db, 'whatsapp_sends', 'record_id', 'VARCHAR(160) NULL');
         self::addColumn($db, 'whatsapp_sends', 'device_id', 'VARCHAR(80) NULL');
         self::addColumn($db, 'whatsapp_chats', 'device_id', 'VARCHAR(80) NULL');
     }

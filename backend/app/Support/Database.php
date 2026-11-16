@@ -112,6 +112,31 @@ final class Database
             $db->exec("UPDATE inbox_emails SET mail_account_id = 1 WHERE mail_account_id IS NULL");
         } catch (\Throwable $e) {}
 
+        // UIDs are unique per mailbox, not globally across all accounts.
+        if ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
+            try {
+                $db->exec('ALTER TABLE inbox_emails DROP INDEX uniq_inbox_uid');
+            } catch (\Throwable $e) {}
+            try {
+                $db->exec('ALTER TABLE inbox_emails ADD UNIQUE KEY uniq_inbox_account_uid (mail_account_id, uid)');
+            } catch (\Throwable $e) {}
+        }
+
+        try {
+            $db->exec('ALTER TABLE inbox_emails ADD COLUMN attachments TEXT NULL');
+        } catch (\Throwable $e) {}
+        try {
+            $db->exec('ALTER TABLE inbox_emails ADD COLUMN archived_at VARCHAR(32) NULL');
+        } catch (\Throwable $e) {}
+        try {
+            $db->exec("CREATE TABLE IF NOT EXISTS inbox_suppressed_uids (
+                mail_account_id INTEGER NOT NULL,
+                uid INTEGER NOT NULL,
+                created_at VARCHAR(32) NOT NULL,
+                PRIMARY KEY (mail_account_id, uid)
+            )");
+        } catch (\Throwable $e) {}
+
         // Seed default mail account if none exists
         try {
             $accountCount = (int) ($db->query("SELECT COUNT(*) FROM mail_accounts")->fetchColumn() ?: 0);

@@ -1,6 +1,9 @@
 (() => {
   let inboxPage = 1, inboxPages = 1, inboxRequest = 0, currentDetailId = null, searchTimer = null;
   let inboxCategory = 'primary';
+  let inboxAutoTimer = null;
+  let inboxSyncing = false;
+  const INBOX_AUTO_MS = 120000;
   const $ = selector => document.querySelector(selector);
 
   const AVATAR_PALETTE = [
@@ -280,7 +283,7 @@
     if (overviewCount) overviewCount.textContent = effectiveGlobal;
     if (badge) {
       if (effectiveGlobal > 0) {
-        badge.textContent = effectiveGlobal > 99 ? '99+' : effectiveGlobal;
+        badge.textContent = String(effectiveGlobal);
         badge.hidden = false;
       } else {
         badge.hidden = true;
@@ -290,7 +293,7 @@
     // Header badge reflects the currently active mailbox filter
     if (headerBadge) {
       if (count > 0) {
-        headerBadge.textContent = count > 99 ? '99+' : count;
+        headerBadge.textContent = String(count);
         headerBadge.hidden = false;
       } else {
         headerBadge.hidden = true;
@@ -338,8 +341,8 @@
       }
 
       const lastSyncEl = $('#inbox-last-sync');
-      if (lastSyncEl && !lastSyncEl.textContent) {
-        lastSyncEl.textContent = '• Connected & up to date';
+      if (lastSyncEl && !lastSyncEl.dataset.syncedAt) {
+        lastSyncEl.textContent = '• Auto-refreshes every 2 min while open';
       }
 
       renderInboxRows(data.emails);
@@ -423,11 +426,12 @@
       }
       cleanSnip = cleanSnip.replace(/\s+/g, ' ').trim();
       const threadCountPill = Number(email.thread_count) > 1 ? `<span class="thread-count-badge">${email.thread_count}</span>` : '';
+      const attachPill = email.has_attachments ? `<span class="thread-count-badge" title="Has attachments">📎</span>` : '';
       tdSubject.innerHTML = `
         <div class="sent-subject-block">
           <div class="sent-subject-line">
             <span class="inbox-subject-text">${escapeHtml(email.subject || '(No subject)')}</span>
-            ${threadCountPill}
+            ${threadCountPill}${attachPill}
           </div>
           ${cleanSnip ? `<div class="sent-snippet">${escapeHtml(cleanSnip)}</div>` : ''}
         </div>
@@ -491,7 +495,7 @@
     if (!emails.length) {
       let emptyMsg = 'This mailbox has no matching messages or has not been synced yet.';
       if (inboxCategory === 'bounces') {
-        emptyMsg = 'No bounced or undelivered emails found.';
+        emptyMsg = 'No failed deliveries found.';
       } else if (inboxCategory === 'linkedin') {
         emptyMsg = 'No LinkedIn messages found.';
       } else if (inboxCategory === 'primary') {
@@ -515,36 +519,69 @@
     }
   }
 
-  async function syncInbox() {
+  async function syncInbox({ quiet = false } = {}) {
+    if (inboxSyncing) return;
+    inboxSyncing = true;
     const syncBtn = $('#inbox-sync');
     const label = syncBtn ? syncBtn.querySelector('span') : null;
-    const originalText = label ? label.textContent : 'Sync emails';
-    if (syncBtn) {
+    const originalText = label ? label.textContent : 'Sync now';
+    if (!quiet && syncBtn) {
       syncBtn.disabled = true;
       syncBtn.classList.add('is-syncing');
     }
-    if (label) label.textContent = 'Syncing…';
+    if (!quiet && label) label.textContent = 'Syncing…';
 
     try {
       const res = await api('inbox/sync', { method: 'POST' });
-      notice(`Inbox synced! Received ${res.new_count} new messages.`);
+      const newCount = Number(res.new_count) || 0;
+      if (!quiet) notice(`Inbox synced! Received ${newCount} new messages.`);
+      else if (newCount > 0) notice(`${newCount} new message${newCount === 1 ? '' : 's'} in Inbox.`);
       const lastSyncEl = $('#inbox-last-sync');
       if (lastSyncEl) {
         const timeStr = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-        lastSyncEl.textContent = `• Synced at ${timeStr}`;
+        lastSyncEl.dataset.syncedAt = timeStr;
+        lastSyncEl.textContent = `• Synced at ${timeStr} · Auto-refreshes every 2 min`;
       }
-      inboxPage = 1;
-      await loadInbox();
+      if (!quiet || newCount > 0) {
+        if (!quiet) inboxPage = 1;
+        await loadInbox();
+      } else if (typeof window.updateInboxBadge === 'function' && res.unread_count != null) {
+        window.updateInboxBadge(res.unread_count, res.global_unread_count);
+      }
     } catch (e) {
-      notice('Failed to sync inbox: ' + e.message, true);
+      if (!quiet) notice('Failed to sync inbox: ' + e.message, true);
     } finally {
-      if (syncBtn) {
+      inboxSyncing = false;
+      if (!quiet && syncBtn) {
         syncBtn.disabled = false;
         syncBtn.classList.remove('is-syncing');
       }
-      if (label) label.textContent = originalText;
+      if (!quiet && label) label.textContent = originalText;
     }
   }
+
+  function inboxIsOpen() {
+    const inboxView = $('#inbox');
+    return !!(inboxView && !inboxView.hidden && document.body.dataset.channel !== 'whatsapp');
+  }
+
+  function startInboxAutoSync() {
+    if (inboxAutoTimer) return;
+    inboxAutoTimer = setInterval(() => {
+      if (document.hidden || !inboxIsOpen()) return;
+      syncInbox({ quiet: true });
+    }, INBOX_AUTO_MS);
+  }
+
+  function stopInboxAutoSync() {
+    if (!inboxAutoTimer) return;
+    clearInterval(inboxAutoTimer);
+    inboxAutoTimer = null;
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && inboxIsOpen()) syncInbox({ quiet: true });
+  });
 
   async function openInboxDetail(id) {
     if (window.openThreadReader) {
@@ -853,7 +890,7 @@
     }
   });
 
-  // Category Tabs (Client Replies vs Bounced vs All)
+  // Category Tabs (Client Replies vs Failed deliveries vs All)
   document.querySelectorAll('.inbox-cat-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const cat = btn.dataset.category;
@@ -896,5 +933,7 @@
   window.renderThreadStackHtml = renderThreadStackHtml;
   window.attachThreadEvents = attachThreadEvents;
   window.setInboxAccountOptions = setInboxAccountOptions;
+  window.startInboxAutoSync = startInboxAutoSync;
+  window.stopInboxAutoSync = stopInboxAutoSync;
 })();
 

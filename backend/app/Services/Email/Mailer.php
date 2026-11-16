@@ -17,6 +17,7 @@ final class Mailer
         }
         $mail->Subject = $email['subject'];
         $mail->Body = $email['body'];
+        $this->applyReplyHeaders($mail, $email);
         if (!empty($email['attachments'])) {
             $attachments = is_string($email['attachments']) ? json_decode($email['attachments'], true) : $email['attachments'];
             if (is_array($attachments)) {
@@ -66,6 +67,7 @@ final class Mailer
                     }
                     $mail->Subject = (string) ($email['subject'] ?? '');
                     $mail->Body = (string) ($email['body'] ?? '');
+                    $this->applyReplyHeaders($mail, $email);
 
                     if (!empty($email['attachments'])) {
                         $attachments = is_string($email['attachments']) ? json_decode($email['attachments'], true) : $email['attachments'];
@@ -119,6 +121,14 @@ final class Mailer
         } finally {
             $mail->smtpClose();
         }
+    }
+
+    private function applyReplyHeaders(PHPMailer $mail, array $email): void
+    {
+        $replyTo = trim((string) ($email['in_reply_to'] ?? ''));
+        if ($replyTo === '') return;
+        $mail->addCustomHeader('In-Reply-To', $replyTo);
+        $mail->addCustomHeader('References', $replyTo);
     }
 
     private function configuredMailer(): PHPMailer
