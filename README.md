@@ -102,9 +102,9 @@ Copy `backend-fastapi/.env.example` to `.env` and configure the providers you us
 MAIL_DRY_RUN=false
 SMTP_HOST=smtp-relay.brevo.com
 SMTP_PORT=587
-SMTP_USERNAME=your-brevo-smtp-login
-SMTP_PASSWORD=your-brevo-smtp-key
-MAIL_FROM_ADDRESS=verified-sender@example.com
+SMTP_USERNAME=
+SMTP_PASSWORD=
+MAIL_FROM_ADDRESS=
 MAIL_FROM_NAME=Communication Desk
 ```
 
@@ -114,9 +114,9 @@ The sender address or domain must be verified in Brevo. The free Brevo plan curr
 
 ```ini
 WHATSAPP_API_VERSION=v23.0
-WHATSAPP_PHONE_NUMBER_ID=your-phone-number-id
-WHATSAPP_ACCESS_TOKEN=your-access-token
-WHATSAPP_VERIFY_TOKEN=your-webhook-token
+WHATSAPP_PHONE_NUMBER_ID=
+WHATSAPP_ACCESS_TOKEN=
+WHATSAPP_VERIFY_TOKEN=
 ```
 
 The application sends text messages through Meta's official Graph API endpoint. Business-initiated messages may require approved templates and Meta billing.
@@ -128,8 +128,8 @@ Brevo is used for outbound SMTP. If inbox synchronization is needed, configure a
 ```ini
 IMAP_HOST=imap.example.com
 IMAP_PORT=993
-IMAP_USERNAME=inbox@example.com
-IMAP_PASSWORD=app-password
+IMAP_USERNAME=
+IMAP_PASSWORD=
 ```
 
 Run synchronization with `POST /api/workers/sync-inbox`.

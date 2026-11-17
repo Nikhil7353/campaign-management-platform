@@ -20,14 +20,14 @@ FRONTEND_ORIGIN=https://your-vercel-site.example
 MAIL_DRY_RUN=false
 SMTP_HOST=smtp-relay.brevo.com
 SMTP_PORT=587
-SMTP_USERNAME=your-brevo-smtp-login
-SMTP_PASSWORD=your-brevo-smtp-key
-MAIL_FROM_ADDRESS=verified-sender@example.com
+SMTP_USERNAME=
+SMTP_PASSWORD=
+MAIL_FROM_ADDRESS=
 MAIL_FROM_NAME=Communication Desk
 WHATSAPP_API_VERSION=v23.0
-WHATSAPP_PHONE_NUMBER_ID=your-meta-phone-number-id
-WHATSAPP_ACCESS_TOKEN=your-meta-access-token
-WHATSAPP_VERIFY_TOKEN=your-webhook-verification-token
+WHATSAPP_PHONE_NUMBER_ID=
+WHATSAPP_ACCESS_TOKEN=
+WHATSAPP_VERIFY_TOKEN=
 ```
 
 Brevo requires the sender domain/address to be verified. Meta requires a WhatsApp Business app, a phone-number ID, an access token, and approved message templates for business-initiated messages.
