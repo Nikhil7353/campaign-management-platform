@@ -1,269 +1,196 @@
-# RSL Communication Desk & Email / WhatsApp Automation Platform
+# Communication Desk
 
-A high-performance, lightweight **Email Automation, WhatsApp Campaign Desk, Inbound Conversation Desk, and Lead Management Platform** built with pure native PHP 8.2+ and MySQL. 
+Communication Desk is a FastAPI and React application for email campaigns, inbox synchronization, WhatsApp messaging, and CSV/XLSX lead imports.
 
-Designed for enterprise reliability with zero heavy framework bloat, sub-millisecond execution times, native Hostinger SMTP/IMAP integration, multi-device WhatsApp dispatch & 2-way live chat, Google Sheets & Excel lead sync, and an authentic Gmail-style threaded conversation reader.
+## Current project status
 
-## Project status (6 Nov 2026)
-
-**Email desk.** On the live host. Sheets, the send queue, inbox threads, and the email overview are in active use. Spain sheet continues queue processing at conservative batch size of 5 for deliverability preservation.
-
-**WhatsApp campaign desk.** Production-polished on local (`http://127.0.0.1:8085`).
-
-- **Chats (`#chats`).** Real-time conversational desk for numbers messaged or incoming. Features live unread count badges (`.wa-unread`), WhatsApp green timestamp highlighting, bold incoming preview snippets, and automatic unread clearance upon opening conversations. Complete thread view with chronological speech bubbles, single/double/blue delivery ticks, full-text contact search, and "All" / "Unread" filter pills.
-- **Direct Outbox / New Message (`#message`).** Dedicated single-recipient composer featuring the platform's standardized `.wa-device-head` header banner, centered ergonomic card (`780px` max-width), and a **multi-device sender dropdown** allowing operators to select which connected phone (up to 5 paired devices) dispatches the message.
-- **Sheets Workspace (`#sheets` / `#sheet-preview`).** Zero-jump 14px top spacing, single-line pacing status banner, and a 6-column balanced layout (`ID`, `AGENCY / NAME`, `PHONE`, `MESSAGE`, `STATUS`, and pinned 80px `ACTIONS` column) with responsive scrolling, bulk dispatch queuing with live pacing countdown, and campaign log tracking.
-- **Sent Campaigns (`#sent`).** High-density dispatched register showing recipient, formatted phone number, message preview, timestamp, and status ticks with 1-click drill-down to full conversation history.
-- **Overview (`#dashboard`).** Executive analytics with dynamic 7-day SVG transmission & response activity graphs, delivery breakdown donuts, device readiness indicators, and recent conversation feeds.
-- **Linked Device & Settings (`#device`, `#settings`).** Multi-device pairing hub supporting up to 5 concurrent linked WhatsApp phones via QR code with live session health indicators, individual device disconnect controls, and configurable API endpoints.
-
----
-
-## 🚀 Key Highlights & Capabilities
-
-- **💬 WhatsApp Multi-Device Campaign & Conversation Desk**
-  - **Multi-Device Dispatch Selector**: Supports up to 5 paired WhatsApp devices simultaneously. Operators can select the exact dispatch device from a live dropdown before sending single messages or launching campaigns.
-  - **Authentic Live Chat & Unread Badging**: Real-time WhatsApp unread counter badges, green timestamp indicators, bold message preview typography, and instant unread count clearance when opening a chat.
-  - **Precision 6-Column Sheets Campaign Workspace**: Optimized 6-column tabular layout (`ID`, `AGENCY / NAME`, `PHONE`, `MESSAGE`, `STATUS`, `ACTIONS` pinned right 80px), single-line pacing banner, and 14px top clearance eliminating dead space.
-  - **Unified Visual Ergonomics**: Standardized `.wa-device-head` header banners across modules, horizontally centered dispatch forms, and smooth zero-shift page transitions between Email and WhatsApp desks.
-
-- **📊 Executive Analytics Overview Dashboard**
-  - **7-Day Communication & Response Curve**: Dynamic SVG traffic graph comparing outgoing dispatches against inbound responses with smooth cubic bezier curves and peak window tracking.
-  - **Deliverability Status Donut Chart**: Live SVG visualization of accepted dispatches, bounces, and active queue counts.
-  - **Hot Conversations & Top Engaged Leads**: Intelligent ranking of contacts with active conversations, reply counts, and instant deep-linking into thread reading.
-  - **Real-Time System Health**: Live connectivity and latency indicators for Hostinger SMTP, IMAP Polling, Google Sheets Hub, and MySQL Worker Queue.
-
-- **📬 Authentic Gmail-Style Thread Reader**
-  - **In-Place Canvas Navigation**: Seamless reading experience without distracting modal popups.
-  - **Thread Grouping & Message Chronology**: Earliest messages collapsed into compact single-line summaries; latest message automatically expanded with clean, native typography.
-  - **Quoted History Trimming**: Cleanly identifies and tucks historical reply text (`On ... wrote:`) behind an authentic Gmail `...` toggle button.
-  - **Inline Reply Composer**: Send direct threaded replies via Hostinger SMTP with automatic `In-Reply-To`, `References`, and `Re:` subject formatting.
-  - **Socket Protocol Cleaning**: Built-in sanitation filters prevent socket protocol tags (e.g. `)\r\nA0004`) from leaking into email bodies.
-
-- **⚡ Hostinger SMTP & IMAP 2-Way Sync Engine**
-  - **Live SMTP Sending**: High-deliverability TLS/SSL dispatch on port 465/587 via PHPMailer.
-  - **Idempotency Protection**: SHA-256 idempotency hashing ensures duplicate sends are prevented even under concurrent cron execution.
-  - **Automated IMAP Inbox Sync**: Direct socket polling over SSL (`imap.hostinger.com:993`) fetching full sender details, recipient copies, thread headers, and unread counts.
-  - **Background Worker & Cron Support**: Atomic record locks prevent race conditions during batch queue processing.
-
-- **📑 Lead Integration Hub (Google Sheets & Excel / CSV)**
-  - **Google Sheets OAuth 2.0**: Connect directly to Google Sheets with automated refresh token management.
-  - **Manual Excel / CSV Importer**: Upload `.xlsx` or UTF-8 `.csv` files directly without third-party dependencies.
-  - **Interactive Column Mapping**: Map dynamic spreadsheet headers to recipient email, recipient name, subject line, and custom template tags.
-  - **Live Preview & Selective Queueing**: Preview rows, inspect mapped data, and selectively dispatch records into the sending queue.
-
----
-
-## 📁 Repository Structure
+The project has been migrated from the legacy PHP application to a provider-neutral FastAPI + React platform. The current project folder and recommended Git repository name are:
 
 ```text
-├── database.sql                 # Clean MySQL production schema (structure only - zero data)
-├── backend/
-│   ├── .env.example             # Production environment template for Hostinger
-│   ├── bootstrap.php            # Autoloader, environment parser, error handlers
-│   ├── composer.json            # Minimal dependencies (PHPMailer)
-│   ├── database.sql             # Duplicate schema copy inside backend
-│   ├── app/
-│   │   ├── Services/
-│   │   │   ├── AdminSetup.php          # Admin authentication & security
-│   │   │   ├── Email/
-│   │   │   │   ├── ConversationThread.php # Thread grouping, quote trimming, artifact filters
-│   │   │   │   ├── EmailProcessor.php     # Queue worker dispatch engine
-│   │   │   │   ├── EmailQueue.php         # Queue management & idempotency
-│   │   │   │   ├── ImapClient.php         # Hostinger IMAP client & MIME decoder
-│   │   │   │   └── Mailer.php             # PHPMailer SMTP client
-│   │   │   ├── WhatsApp/
-│   │   │   │   ├── DeviceLink.php         # Multi-device pairing & targeted Baileys dispatch
-│   │   │   │   ├── PlatformSettings.php   # WhatsApp API configuration & endpoints
-│   │   │   │   ├── WhatsAppChatService.php# Thread history, live messages & unread counts
-│   │   │   │   ├── WhatsAppInbox.php      # Inbound sync & real-time webhook ingestion
-│   │   │   │   ├── WhatsAppOverviewService.php # 7-day SVG curves & metrics aggregation
-│   │   │   │   ├── WhatsAppSentService.php# Sent log register & delivery tick tracking
-│   │   │   │   └── WhatsAppTables.php     # Dynamic database table provisioning
-│   │   │   ├── Google/                 # Google OAuth & Sheets API
-│   │   │   └── Sheets/                 # Excel (.xlsx) / CSV parser & mapper
-│   │   └── Support/
-│   │       └── Database.php            # PDO MySQL connection & schema migrations
-│   ├── public/
-│   │   └── index.php            # HTTP single-entry point & REST API router
-│   ├── scripts/
-│   │   ├── check-database.php   # MySQL connection test utility
-│   │   ├── check-smtp.php       # SMTP diagnostic utility
-│   │   └── cron/
-│   │       ├── process-emails.php # Background queue processing worker
-│   │       └── sync-inbox.php     # Background IMAP sync worker
-│   └── tests/                   # Automated test suite (unit, integration & feature tests)
-│       ├── run.php              # Core email queue & validation checks (25 checks)
-│       ├── sheets.php           # Google Sheets & Excel parser checks (24 checks)
-│       ├── wa_overview_test.php # WhatsApp overview aggregation test
-│       └── wa_chat_thread_test.php # WhatsApp chat thread & unread test
-├── frontend/
-│   ├── public/
-│   │   └── assets/              # Native CSS & ES6 JS (No Node build steps required)
-│   │       ├── app.css          # Design system & dark sidebar styling
-│   │       ├── app.js           # Single-page controller & SVG chart rendering
-│   │       ├── inbox.js         # Gmail thread reader & inline composer logic
-│   │       ├── sheets.js        # Google Sheets & Excel mapping controller
-│   │       ├── wa-chats.js      # WhatsApp chat threads & unread badge controller
-│   │       ├── wa-device.js     # Multi-device QR linking & session controller
-│   │       ├── wa-overview.js   # WhatsApp SVG curve rendering & metrics
-│   │       ├── wa-sent.js       # WhatsApp sent log & drilldown controller
-│   │       ├── wa-sheets.js     # WhatsApp sheets campaign dispatch controller
-│   │       └── wa-sheets.css    # WhatsApp workspace styles, tables & layouts
-│   └── resources/views/
-│       └── dashboard/index.php  # Main single-page application view
-└── docs/
-    ├── GOOGLE_SHEETS.md         # Google OAuth setup guide
-    └── SETUP.md                 # Local setup & configuration
+campaign-management-platform
 ```
 
----
+Completed:
 
-## 🔒 Security & Environment Protection
+- Removed the legacy PHP backend, PHP frontend, and shared-hosting-specific files.
+- Added the FastAPI backend with SQLAlchemy, local SQLite support, email queue routes, inbox routes, WhatsApp routes, Sheets upload routes, and Google OAuth configuration.
+- Added Brevo SMTP support for outbound email.
+- Added optional IMAP synchronization for inbound email.
+- Added Meta WhatsApp Cloud API support.
+- Added the React/Vite frontend with separate Email Desk and WhatsApp Desk workflows.
+- Restored the reference application structure: dashboard, inbox, sent, sheets, mail accounts, integrations, chats, linked device, and settings screens.
+- Added the current modern light-blue glassmorphism visual theme.
+- Updated the deployment documentation for free cloud hosting options.
+- Verified the frontend production build with `npm run build`.
 
-- **`.env` is Git-Ignored**: Real credentials (`backend/.env`) are strictly excluded by `.gitignore` (`**/.env`). Only the clean placeholder template `backend/.env.example` is pushed to GitHub.
-- **Data-Free Schema**: `database.sql` contains exclusively `CREATE TABLE` definitions and zero user records, personal emails, or private company data.
-- **CSRF & Security Headers**: Built-in CSRF token validation on all state-changing endpoints, strict `SameSite` cookies, `nosniff`, `frame-ancestors 'none'`, and CSP headers.
+Next steps:
 
----
+1. Configure `backend-fastapi/.env` with the database, Brevo, IMAP, Meta, and Google credentials that are required.
+2. Start FastAPI and connect the React frontend to the running API.
+3. Test email sending, inbox synchronization, WhatsApp sending, and spreadsheet uploads with real provider accounts.
+4. Add authentication, background scheduling, production database configuration, and deployment secrets before production use.
+5. Deploy the frontend and backend using the checklist in the deployment guide.
 
-## 🌐 Hostinger Deployment Guide (For Administrator / Boss)
+The interface is ready for continued design changes. Provider credentials and production deployment are not included in this repository.
 
-Deploying to **Hostinger** (Shared Web Hosting, Cloud Hosting, or VPS) takes only a few minutes:
+The legacy application has been removed. The active stack is:
 
-### Step 1: Upload Project Files
-1. In Hostinger **hPanel**, navigate to **File Manager** (or connect via SFTP).
-2. Upload the repository contents to your website directory (e.g. `public_html` or a subdomain folder like `public_html/campaign/`).
-3. Set your website **Document Root** in Hostinger to point to:
-   ```text
-   /public_html/backend/public
-   ```
-   *(This ensures sensitive backend files, `.env`, and storage folders are protected outside the web root).*
+- FastAPI + SQLAlchemy backend
+- React + Vite frontend
+- SQLite for local development; MySQL-compatible SQL schema for deployment
+- Brevo SMTP for outbound email
+- Optional IMAP mailbox for inbound email synchronization
+- Meta WhatsApp Cloud API for WhatsApp messages
+- Google OAuth configuration for Sheets integration
 
-### Step 2: Create & Import the MySQL Database
-1. In Hostinger **hPanel**, go to **Databases** > **MySQL Databases**.
-2. Create a new database (e.g., `u123456789_email_platform`) and create a database user with full privileges.
-3. Open **phpMyAdmin** for that database.
-4. Click the **Import** tab.
-5. Select `database.sql` from the repository root (or `backend/database.sql`) and click **Go**.
-   - *This creates all 6 required InnoDB tables (`emails`, `inbox_emails`, `activity`, `google_connection`, `sheet_sources`, `uploaded_sheets`) in milliseconds.*
+## Project structure
 
-### Step 3: Configure Environment Variables
-1. In `backend/`, copy `.env.example` to create `.env`:
-   ```bash
-   cp backend/.env.example backend/.env
-   ```
-2. Open `backend/.env` in the Hostinger File Manager editor and fill in your details:
-   ```ini
-   APP_NAME="RSL Communication Desk"
-   APP_ENV=production
-   APP_DEBUG=false
-   APP_URL=https://yourdomain.com
-   APP_TIMEZONE=Asia/Kolkata
+```text
+backend-fastapi/
+├── app/
+│   ├── config.py       # Environment settings
+│   ├── db.py           # SQLAlchemy engine and local schema bootstrap
+│   ├── main.py         # FastAPI routes
+│   └── services.py     # Email, IMAP, Google, and WhatsApp services
+├── requirements.txt
+└── .env.example
 
-   # Database Credentials
-   DB_CONNECTION=mysql
-   DB_HOST=localhost
-   DB_PORT=3306
-   DB_DATABASE=u123456789_email_platform
-   DB_USERNAME=u123456789_dbuser
-   DB_PASSWORD=YourStrongDatabasePassword
+frontend-react/
+├── src/main.jsx        # React application and screens
+├── src/styles.css
+├── package.json
+└── vite.config.js
 
-   # Sending Settings
-   AUTOMATIC_SENDING_ENABLED=true
-   MAIL_DRY_RUN=false
-
-   # Hostinger SMTP Outgoing
-   SMTP_HOST=smtp.hostinger.com
-   SMTP_PORT=465
-   SMTP_USERNAME=your-email@yourdomain.com
-   SMTP_PASSWORD=YourEmailPassword
-   MAIL_FROM_ADDRESS=your-email@yourdomain.com
-   MAIL_FROM_NAME="RSL Communications"
-
-   # Hostinger IMAP Inbound Sync
-   IMAP_HOST=imap.hostinger.com
-   IMAP_PORT=993
-   IMAP_USERNAME=your-email@yourdomain.com
-   IMAP_PASSWORD=YourEmailPassword
-   ```
-
-### Step 4: Install Hostinger Cron Jobs
-Hostinger provides an easy Cron Jobs manager in **hPanel** > **Advanced** > **Cron Jobs**:
-
-1. **Email Dispatch Worker** (runs every minute to send queued emails):
-   - **Type**: PHP Command
-   - **Schedule**: `* * * * *` (Every minute)
-   - **Command**:
-     ```bash
-     /usr/bin/php /home/uXXXXXXX/public_html/backend/scripts/cron/process-emails.php >> /dev/null 2>&1
-     ```
-
-2. **Inbound Email Sync Worker** (polls Hostinger mailbox for replies):
-   - **Type**: PHP Command
-   - **Schedule**: `*/5 * * * *` (Every 5 minutes)
-   - **Command**:
-     ```bash
-     /usr/bin/php /home/uXXXXXXX/public_html/backend/scripts/cron/sync-inbox.php >> /dev/null 2>&1
-     ```
-
-*(Replace `/home/uXXXXXXX/public_html/` with the absolute path displayed at the top of your Hostinger File Manager).*
-
----
-
-## 💻 Local Development & Testing
-
-### Requirements
-- PHP 8.2 or higher (with `pdo_mysql`, `curl`, `mbstring`, `openssl`, `zip`)
-- MySQL 8.0+ or MariaDB 10.4+
-- Composer (for initial PHPMailer setup)
-
-### Running Locally
-1. Install dependencies:
-   ```bash
-   cd backend
-   composer install
-   ```
-2. Start the built-in development server:
-   ```bash
-   php -S 127.0.0.1:8085 -t backend/public backend/public/index.php
-   ```
-3. Open `http://127.0.0.1:8085` in your browser.
-
-### Running Automated Verification Tests
-The project includes automated test suites covering queue processing, idempotency, email headers, quote trimming, Google Sheets parsing, WhatsApp overview aggregation, and conversation threads:
-```bash
-# Run core email queue and validation checks (25/25 checks)
-php backend/tests/run.php
-
-# Run Google Sheets and Excel upload tests (24/24 checks)
-php backend/tests/sheets.php
-
-# Run WhatsApp overview and chat thread tests
-php backend/tests/wa_overview_test.php
-php backend/tests/wa_chat_thread_test.php
+database.sql            # Deployment schema
+docs/FASTAPI_FREE_DEPLOYMENT.md
 ```
 
----
+## Local setup
 
-## 🛠️ Diagnostics & CLI Utilities
+### Backend
 
-Quick terminal commands for testing server connectivity:
-```bash
-# Verify database connection
-php backend/scripts/check-database.php
+Use Python 3.13 or a compatible Python 3.11+ environment:
 
-# Verify Hostinger SMTP sending
-php backend/scripts/check-smtp.php
-
-# Run manual queue processing
-php backend/scripts/cron/process-emails.php
-
-# Run manual IMAP sync
-php backend/scripts/cron/sync-inbox.php
+```powershell
+cd backend-fastapi
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
----
+The backend initializes a local SQLite database at `backend-fastapi/storage/database.sqlite`.
 
-## 📄 License
-Proprietary & Confidential - Developed for **RSL Solution PVT LTD**. All rights reserved.
+### Frontend
+
+```powershell
+cd frontend-react
+npm install
+npm run dev
+```
+
+Set `VITE_API_URL` when the backend is not running at `http://localhost:8000/api`.
+
+## Provider configuration
+
+Copy `backend-fastapi/.env.example` to `.env` and configure the providers you use.
+
+### Brevo email
+
+```ini
+MAIL_DRY_RUN=false
+SMTP_HOST=smtp-relay.brevo.com
+SMTP_PORT=587
+SMTP_USERNAME=your-brevo-smtp-login
+SMTP_PASSWORD=your-brevo-smtp-key
+MAIL_FROM_ADDRESS=verified-sender@example.com
+MAIL_FROM_NAME=Communication Desk
+```
+
+The sender address or domain must be verified in Brevo. The free Brevo plan currently includes 300 emails per day.
+
+### Meta WhatsApp Cloud API
+
+```ini
+WHATSAPP_API_VERSION=v23.0
+WHATSAPP_PHONE_NUMBER_ID=your-phone-number-id
+WHATSAPP_ACCESS_TOKEN=your-access-token
+WHATSAPP_VERIFY_TOKEN=your-webhook-token
+```
+
+The application sends text messages through Meta's official Graph API endpoint. Business-initiated messages may require approved templates and Meta billing.
+
+### Inbound email
+
+Brevo is used for outbound SMTP. If inbox synchronization is needed, configure an IMAP mailbox from a provider such as Gmail or Outlook:
+
+```ini
+IMAP_HOST=imap.example.com
+IMAP_PORT=993
+IMAP_USERNAME=inbox@example.com
+IMAP_PASSWORD=app-password
+```
+
+Run synchronization with `POST /api/workers/sync-inbox`.
+
+## API routes
+
+- `GET /api/health`
+- `GET /api/dashboard`
+- `GET /api/inbox`
+- `POST /api/inbox/{email_id}/read`
+- `GET /api/emails`
+- `POST /api/emails`
+- `POST /api/emails/{email_id}/send`
+- `POST /api/workers/process-email`
+- `POST /api/workers/sync-inbox`
+- `GET|POST /api/whatsapp/settings`
+- `GET /api/whatsapp/chats`
+- `GET /api/whatsapp/device`
+- `POST /api/whatsapp/send`
+- `GET /api/whatsapp/overview`
+- `GET /api/google/status`
+- `POST /api/google/connect`
+- `POST /api/google/disconnect`
+- `GET /api/sheets`
+- `POST /api/sheets/upload`
+
+## Deployment
+
+For a free test deployment, host the React build on Vercel or Render Static Sites and the FastAPI service on Render. Use a managed database for hosted deployments instead of relying on local SQLite storage.
+
+See [docs/FASTAPI_FREE_DEPLOYMENT.md](docs/FASTAPI_FREE_DEPLOYMENT.md) for the deployment checklist and environment variables.
+
+## Git repository handoff
+
+Recommended repository name:
+
+```text
+campaign-management-platform
+```
+
+From the project folder, create the repository on GitHub with that name, keep it private if it contains company work, and push the code:
+
+```powershell
+cd "C:\Campaign project\campaign-management-platform"
+git add .
+git commit -m "Complete FastAPI and React migration"
+git branch -M main
+git remote add origin https://github.com/YOUR-USERNAME/campaign-management-platform.git
+git push -u origin main
+```
+
+Do not commit `backend-fastapi/.env`, SQLite files, access tokens, or provider credentials. The existing `.gitignore` is intended to exclude local secrets and generated files.
+
+## Validation
+
+```powershell
+cd backend-fastapi
+python -m compileall -q app
+
+cd ..\frontend-react
+npm run build
+```
+
+Keep provider credentials in environment variables or the deployment secret store. Do not commit `.env` files or access tokens.

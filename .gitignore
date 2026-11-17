@@ -3,7 +3,13 @@
 !**/.env.example
 **/vendor/
 **/node_modules/
+**/__pycache__/
+*.py[cod]
 /frontend/public/build/
+/frontend-react/dist/
+/backend-fastapi/storage/**
+/backend-fastapi/__pycache__/
+/backend-fastapi/.pytest_cache/
 /backend/bootstrap/cache/*
 !/backend/bootstrap/cache/.gitkeep
 /backend/storage/**

@@ -1,7 +1,7 @@
 -- ====================================================================
--- RSL Communication Desk & Email Automation Platform
+-- Communication Desk & Email Automation Platform
 -- Production Database Schema (Structure Only - No Data)
--- Ready for Hostinger MySQL / phpMyAdmin / cPanel / Linux Server
+-- Ready for managed MySQL-compatible deployment; FastAPI runtime is provider-neutral
 -- Character Set: utf8mb4 / Collation: utf8mb4_unicode_ci / Engine: InnoDB
 -- ====================================================================
 
@@ -16,6 +16,7 @@ SET time_zone = "+00:00";
 DROP TABLE IF EXISTS `emails`;
 CREATE TABLE `emails` (
   `id` INT NOT NULL AUTO_INCREMENT,
+  `mail_account_id` INT DEFAULT NULL,
   `recipient` VARCHAR(254) NOT NULL,
   `cc` TEXT NOT NULL,
   `bcc` TEXT NOT NULL,
@@ -40,11 +41,12 @@ CREATE TABLE `emails` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------------------
--- 2. Table structure for `inbox_emails` (Hostinger IMAP incoming messages)
+-- 2. Table structure for `inbox_emails` (optional IMAP incoming messages)
 -- --------------------------------------------------------------------
 DROP TABLE IF EXISTS `inbox_emails`;
 CREATE TABLE `inbox_emails` (
   `id` INT NOT NULL AUTO_INCREMENT,
+  `mail_account_id` INT DEFAULT NULL,
   `uid` INT NOT NULL,
   `message_id` VARCHAR(255) DEFAULT NULL,
   `from_name` VARCHAR(255) DEFAULT NULL,
@@ -57,6 +59,7 @@ CREATE TABLE `inbox_emails` (
   `is_read` INT NOT NULL DEFAULT 0,
   `received_at` VARCHAR(64) NOT NULL,
   `created_at` VARCHAR(32) NOT NULL,
+  `archived_at` VARCHAR(32) DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_inbox_uid` (`uid`),
   KEY `idx_inbox_from_email` (`from_email`),
@@ -115,6 +118,68 @@ CREATE TABLE `uploaded_sheets` (
   `workbook` MEDIUMTEXT NOT NULL,
   `created_at` VARCHAR(32) NOT NULL,
   PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------------------
+-- 7. FastAPI migration support tables
+-- --------------------------------------------------------------------
+CREATE TABLE `mail_accounts` (
+  `id` INT NOT NULL AUTO_INCREMENT, `name` VARCHAR(255) NOT NULL,
+  `email` VARCHAR(254) NOT NULL, `smtp_host` VARCHAR(255) NOT NULL,
+  `smtp_port` INT NOT NULL DEFAULT 465, `smtp_user` VARCHAR(255) NOT NULL,
+  `smtp_pass` TEXT NOT NULL, `imap_host` VARCHAR(255) NOT NULL,
+  `imap_port` INT NOT NULL DEFAULT 993, `imap_user` VARCHAR(255) NOT NULL,
+  `imap_pass` TEXT NOT NULL, `is_default` INT NOT NULL DEFAULT 1,
+  `status` VARCHAR(32) NOT NULL DEFAULT 'active', `created_at` VARCHAR(64) NOT NULL,
+  `updated_at` VARCHAR(64) NOT NULL, PRIMARY KEY (`id`), UNIQUE KEY `uniq_mail_account_email` (`email`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `users` (
+  `id` INT NOT NULL AUTO_INCREMENT, `name` VARCHAR(255) NOT NULL,
+  `email` VARCHAR(254) NOT NULL, `password_hash` VARCHAR(255) NOT NULL,
+  `role` VARCHAR(32) NOT NULL DEFAULT 'member', `assigned_account_id` INT DEFAULT NULL,
+  `created_at` VARCHAR(64) NOT NULL, `updated_at` VARCHAR(64) NOT NULL,
+  PRIMARY KEY (`id`), UNIQUE KEY `uniq_user_email` (`email`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `whatsapp_account` (
+  `id` INT NOT NULL, `name` VARCHAR(160) NOT NULL DEFAULT 'WhatsApp',
+  `base_url` VARCHAR(255) NOT NULL DEFAULT '', `access_token` TEXT NOT NULL,
+  `updated_at` VARCHAR(64) NOT NULL, PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `whatsapp_settings` (
+  `id` INT NOT NULL, `api_url` TEXT NOT NULL, `api_token` TEXT NOT NULL,
+  `phone_number_id` VARCHAR(120) NOT NULL DEFAULT '', `api_version` VARCHAR(20) NOT NULL DEFAULT 'v23.0', `verify_token` TEXT NOT NULL,
+  `updated_at` VARCHAR(64) NOT NULL, PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `whatsapp_devices` (
+  `id` INT NOT NULL AUTO_INCREMENT, `name` VARCHAR(120) NOT NULL,
+  `phone` VARCHAR(40) NOT NULL DEFAULT '', `status` VARCHAR(32) NOT NULL DEFAULT 'disconnected',
+  `qr_code` LONGTEXT DEFAULT NULL, `updated_at` VARCHAR(64) NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `whatsapp_sends` (
+  `id` INT NOT NULL AUTO_INCREMENT, `recipient` VARCHAR(40) NOT NULL,
+  `message` TEXT NOT NULL, `status` VARCHAR(32) NOT NULL DEFAULT 'queued',
+  `device_id` VARCHAR(120) DEFAULT NULL, `created_at` VARCHAR(64) NOT NULL,
+  PRIMARY KEY (`id`), KEY `idx_wa_send_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `whatsapp_chats` (
+  `id` INT NOT NULL AUTO_INCREMENT, `remote_jid` VARCHAR(120) NOT NULL,
+  `name` VARCHAR(255) NOT NULL DEFAULT '', `phone` VARCHAR(40) NOT NULL DEFAULT '',
+  `last_message` TEXT NOT NULL, `unread_count` INT NOT NULL DEFAULT 0,
+  `last_at` VARCHAR(64) NOT NULL, PRIMARY KEY (`id`), UNIQUE KEY `uniq_wa_chat_jid` (`remote_jid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `whatsapp_messages` (
+  `id` INT NOT NULL AUTO_INCREMENT, `chat_id` INT NOT NULL,
+  `direction` VARCHAR(12) NOT NULL, `body` TEXT NOT NULL,
+  `status` VARCHAR(20) NOT NULL DEFAULT 'sent', `created_at` VARCHAR(64) NOT NULL,
+  PRIMARY KEY (`id`), KEY `idx_wa_message_chat` (`chat_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;
