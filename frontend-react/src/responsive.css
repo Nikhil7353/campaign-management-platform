@@ -1,0 +1,56 @@
+.mobile-header{display:none}
+.settings-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px}
+.settings-tabs button{border:1px solid var(--border);background:var(--surface);color:var(--muted);padding:10px 16px;border-radius:10px;min-height:44px;cursor:pointer}
+.settings-tabs button.active{background:var(--tint);color:var(--accent);border-color:var(--accent);font-weight:700}
+.main-content{min-width:0}
+.main-content>*,.dashboard-main-grid>*,.dashboard-lower-grid>*,.dashboard-footer-grid>*,.analytics-grid>*,.bottom-grid>*,.sheets-grid>*,.compose-layout>*{min-width:0}
+.panel,.dashboard-card{overflow-wrap:anywhere}
+.table-wrap{max-width:100%;overflow-x:auto}
+.table-wrap table{min-width:500px}
+.page-header,.email-dashboard-header,.dashboard-actions,.panel-head,.dashboard-card-heading,.header-selects{flex-wrap:wrap}
+.error-banner,.compose-notice{overflow-wrap:anywhere}
+.health-item{min-width:0;flex-wrap:wrap}.health-item>div{min-width:0}
+.settings-form input,.compose-form input,.compose-form textarea{min-width:0;width:100%}
+.sent-detail pre{max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere}
+@media(min-width:651px) and (max-width:1100px){
+ .sidebar{width:190px;margin:10px;padding:20px 12px}
+ .main-content{padding:28px 18px}
+ .dashboard-main-grid,.dashboard-lower-grid,.dashboard-footer-grid,.analytics-grid,.bottom-grid,.sheets-grid,.compose-layout{grid-template-columns:minmax(0,1fr)}
+ .dashboard-kpis,.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .email-dashboard-header h1,.page-header h1{font-size:30px}
+ .health-grid{grid-template-columns:1fr}
+ .sent-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}.sent-snippet{display:none}
+}
+@media(max-width:650px){
+ .app-shell{display:block;overflow:visible}
+ .mobile-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:50}
+ .mobile-header strong{font-size:14px}.mobile-header button{min-height:44px;border:1px solid var(--border);border-radius:10px;background:var(--tint);color:var(--accent);padding:8px 14px;font-weight:700}
+ .sidebar{display:none;width:auto;min-height:0;margin:10px 12px;padding:16px;border-radius:14px}
+ .sidebar.navigation-open{display:flex}
+ .sidebar .brand{display:none}.sidebar .workspace{padding-bottom:12px}.sidebar-foot{margin-top:12px}
+ .sidebar-nav{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .sidebar-nav button{min-width:0;min-height:44px;padding:10px 8px;font-size:12px;gap:7px}
+ .main-content{padding:20px 12px 32px;max-width:100%;width:100%}
+ .dashboard-kpis,.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+ .dashboard-kpi,.kpi-card{padding:16px 12px}.dashboard-kpi>strong,.kpi-card>strong{font-size:26px}
+ .panel,.dashboard-card{padding:16px;border-radius:16px}
+ .page-header,.email-dashboard-header{gap:12px;align-items:stretch}
+ .dashboard-actions{flex-direction:row;align-items:center;width:100%}.account-pill{width:auto;flex:1}
+ .page-header h1,.email-dashboard-header h1{font-size:28px}
+ .dashboard-status{gap:8px}.dashboard-status>span:not(.live-dot){flex-basis:100%}
+ .dashboard-card-heading{gap:12px}.range-pills button{min-height:40px}
+ .inbox-toolbar,.header-selects{flex-wrap:wrap}.inbox-toolbar input{min-width:0;width:100%}
+ .header-selects select{min-width:0;max-width:100%}
+ .wa-delivery{flex-wrap:wrap}.breakdown{min-width:160px}
+ .floating-compose,.floating-compose.expanded{left:0;right:0;bottom:0;width:100%;max-height:100dvh;border-radius:14px 14px 0 0}
+ .floating-compose.minimized{left:auto;right:8px;width:min(280px,calc(100vw - 16px))}
+ .floating-form{padding:0 14px max(16px,env(safe-area-inset-bottom));max-height:calc(100dvh - 64px)}
+ .floating-form input,.floating-form textarea{font-size:16px}
+ .floating-title button,.compose-address button{min-width:44px;min-height:44px}
+ .floating-form textarea{min-height:140px;height:30dvh}.expanded .floating-form textarea{height:45dvh}
+ .sent-toolbar{gap:10px;flex-wrap:wrap}.sent-toolbar input{width:100%;flex-basis:100%}
+ .sent-row{grid-template-columns:minmax(0,1fr) auto;gap:7px;padding:14px 4px}
+ .sent-row>span:first-child{grid-column:1}.sent-row>strong{grid-column:1;grid-row:2}.sent-row time{grid-column:2;grid-row:1;font-size:11px}
+ .quiet,.primary{min-height:44px}
+}
+@media(max-width:360px){.dashboard-kpis,.kpi-grid{grid-template-columns:minmax(0,1fr)}.sidebar-nav{grid-template-columns:1fr}}

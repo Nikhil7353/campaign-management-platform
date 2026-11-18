@@ -1,0 +1,53 @@
+/* Shared White + Indigo palette, loaded after component styles. */
+:root{--page:#f7f8fc;--surface:#fff;--ink:#202437;--muted:#667085;--border:#e4e7ef;--accent:#4f46e5;--accent-hover:#4338ca;--tint:#eef2ff;--shadow:0 4px 18px #20243708;color:var(--ink);background:var(--page)}
+body{background:var(--page);color:var(--ink)}
+.app-shell:before,.app-shell:after{display:none}
+.sidebar,.panel,.kpi-card,.dashboard-card,.dashboard-kpi,.composer-card,.composer-info,.queue-card{background:var(--surface);border-color:var(--border);box-shadow:var(--shadow);backdrop-filter:none}
+.sidebar{border-radius:20px}
+.brand,.workspace strong,.page-header h1,.email-dashboard-header h1,.panel h2,.dashboard-card-heading h2,.kpi-card>strong,.dashboard-kpi>strong,.composer-card-head h2,.queue-card h3,.composer-info h3,.campaign-empty b,.attention-row b,.health-item b,.funnel-row b,.placeholder h3{color:var(--ink)}
+.brand-mark,.account-avatar{background:var(--accent);color:white;border-color:var(--accent);box-shadow:none}
+.eyebrow,.workspace small{color:var(--accent)}
+.muted,.panel-subtitle,.dashboard-card-heading p,.dashboard-kpi>small,.sidebar-foot small,.campaign-empty span,.attention-row p,.health-item small,.activity-empty,.empty,.queue-empty,.composer-info p,.composer-card-head p,.queue-card-head p,.account-pill small,.floating-form small,.sent-snippet{color:var(--muted)}
+.channel-switch,.range-pills{background:#f0f1f6;border-color:var(--border)}
+.channel-switch button,.sidebar-nav button,.sidebar-foot button{color:#596174}
+.channel-switch button.selected{background:white;color:var(--accent);box-shadow:0 2px 6px #2024370a}
+.sidebar-nav button:hover,.sidebar-nav button.active{background:var(--tint);color:var(--accent);border-color:transparent;box-shadow:none}
+.sidebar-foot{border-color:var(--border)}
+.sidebar-foot button{border-color:var(--border)}
+.compose-button,.primary{background:var(--accent);color:white;border-color:var(--accent);box-shadow:0 3px 8px #4f46e51a}
+.compose-button:hover,.primary:hover{background:var(--accent-hover);box-shadow:0 4px 12px #4f46e526}
+.quiet,.account-pill,.header-selects select,.inbox-toolbar button{background:white;color:var(--accent);border-color:var(--border);box-shadow:none;backdrop-filter:none}
+.quiet:hover{background:var(--tint);color:var(--accent-hover)}
+.dashboard-status,.quota{background:white;border-color:var(--border);box-shadow:none;backdrop-filter:none;color:var(--muted)}
+.dashboard-status b,.dashboard-status button,.quota strong,.quota button,.text-button,.attention-row button{color:var(--accent)}
+.dashboard-kpi.blue,.dashboard-kpi.cyan,.dashboard-kpi.violet,.dashboard-kpi.rose{background:white;border-top:3px solid var(--accent)}
+.dashboard-kpi.cyan{border-top-color:#0d9488}.dashboard-kpi.violet{border-top-color:#8b5cf6}.dashboard-kpi.rose{border-top-color:#e1637e}
+.dashboard-kpi:after,.kpi-card:after{background:var(--tint)}
+.dashboard-kpi>span,.kpi-top{color:#596174}
+.dashboard-kpi i,.kpi-top b{color:var(--accent)}
+.dashboard-kpi:hover,.kpi-card.clickable:hover{box-shadow:0 8px 22px #2024370d}
+.range-pills .active{color:var(--accent);background:white;box-shadow:0 2px 6px #2024370a}
+.range-pills button{color:var(--muted)}
+.chart-bars i,.chart-bars i.active,.bar-chart i{background:linear-gradient(#a5b4fc,#6366f1);box-shadow:none}
+.chart-bars i.tall{background:linear-gradient(#818cf8,#4338ca)}
+.chart-key,.chart-legend,.chart-days,.chart-axis,.chart-labels,.funnel-row>div:first-child,.ratio-list p,.breakdown p{color:var(--muted)}
+.key-blue,.legend-green,.funnel-track i.blue{background:var(--accent)}
+.funnel-track{background:#eef0f6}.funnel-track i.soft{background:#c7d2fe}
+.chart-days span:last-child,.chart-axis b{color:var(--accent)}
+.chart-legend strong,.empty-orb,.avatar,.soft-badge,.count,.status-pill,.unread,.health-item em,.kpi-badge.blue,.kpi-badge.green,.workflow span,.info-icon,.draft-status,.field-links button,.queue-card-head span,.queue-item em{background:var(--tint);color:var(--accent);box-shadow:none}
+.donut{background:conic-gradient(var(--accent) 0 94%,#e2ad4a 94% 97%,#d74d60 97%);box-shadow:none}.donut>div{background:white}.donut strong{color:var(--ink)}
+.health-item{background:#fafbfe;border-color:var(--border)}
+.attention-row,.health p,.breakdown p,.form-actions,.composer-actions,.composer-card-head,.queue-card-head,.check-list,.queue-item,th,td{border-color:var(--border)}
+th{color:var(--muted)}td,.queue-item b,.conversation,.workflow p{color:#475467}
+.compose-form input,.compose-form textarea,.settings-form input,.modern-compose-form input,.modern-compose-form textarea,.inbox-toolbar input,.sent-toolbar input{background:white;border:1px solid var(--border);color:var(--ink);box-shadow:none}
+.compose-form label,.settings-form label,.modern-compose-form label{color:#475467}
+.upload-box{background:#fafbff;border-color:#a5b4fc;color:var(--muted)}.upload-box b{color:var(--ink)}
+.floating-compose{background:white;border-color:var(--border);box-shadow:0 12px 60px #20243726}
+.floating-title{background:var(--tint)}.floating-title button{color:#3730a3}.floating-title button:hover{background:#e0e7ff}
+.floating-form label,.floating-form footer,.sent-row,.sent-detail pre{border-color:var(--border)}
+.floating-form input,.floating-form textarea,.sent-row{color:var(--ink)}
+.floating-form label,.compose-address button,.sent-toolbar{color:var(--muted)}
+.sent-row:hover,.compose-notice{background:var(--tint)}.compose-notice{color:#3730a3}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.floating-form input:focus-visible{outline-color:var(--accent)}
+.modern-compose-form input:focus,.modern-compose-form textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px #4f46e515}

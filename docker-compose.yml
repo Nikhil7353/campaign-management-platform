@@ -1,0 +1,43 @@
+services:
+  backend:
+    build:
+      context: ./backend-fastapi
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///./storage/database.sqlite}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      MAIL_DRY_RUN: ${MAIL_DRY_RUN:-true}
+      AUTOMATIC_SENDING_ENABLED: ${AUTOMATIC_SENDING_ENABLED:-false}
+      SMTP_HOST: ${SMTP_HOST:-smtp-relay.brevo.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-}
+      MAIL_FROM_NAME: ${MAIL_FROM_NAME:-Communication Desk}
+      IMAP_HOST: ${IMAP_HOST:-}
+      IMAP_PORT: ${IMAP_PORT:-993}
+      IMAP_USERNAME: ${IMAP_USERNAME:-}
+      IMAP_PASSWORD: ${IMAP_PASSWORD:-}
+      WHATSAPP_BASE_URL: ${WHATSAPP_BASE_URL:-}
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_API_VERSION: ${WHATSAPP_API_VERSION:-v23.0}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/google/callback}
+    volumes:
+      - campaign_data:/app/storage
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend-react
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  campaign_data:

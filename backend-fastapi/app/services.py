@@ -29,6 +29,7 @@ def rows(db: Session, query: str, params: dict[str, Any] | None = None) -> list[
 
 def dashboard(db: Session) -> dict[str, Any]:
     sent = rows(db, "SELECT COUNT(*) AS value FROM emails WHERE status IN ('sent','delivered')")[0].get("value", 0)
+    delivered = rows(db, "SELECT COUNT(*) AS value FROM emails WHERE status = 'delivered'")[0].get("value", 0)
     failed = rows(db, "SELECT COUNT(*) AS value FROM emails WHERE status IN ('failed','bounced')")[0].get("value", 0)
     pending = rows(db, "SELECT COUNT(*) AS value FROM emails WHERE status IN ('pending','processing')")[0].get("value", 0)
     unread = rows(db, "SELECT COUNT(*) AS value FROM inbox_emails WHERE is_read = 0 AND COALESCE(archived_at, '') = ''")[0].get("value", 0)
@@ -37,10 +38,16 @@ def dashboard(db: Session) -> dict[str, Any]:
                COUNT(*) AS replies, MAX(received_at) AS last_at
         FROM inbox_emails GROUP BY from_email, from_name ORDER BY last_at DESC LIMIT 6
     """)
+    recent_activity = rows(db, """
+        SELECT id, email_id, action, detail, created_at
+        FROM activity ORDER BY created_at DESC LIMIT 6
+    """)
     return {
-        "emails_sent": int(sent or 0), "emails_failed": int(failed or 0),
+        "emails_sent": int(sent or 0), "emails_delivered": int(delivered or 0),
+        "delivery_confirmation_available": bool(delivered),
+        "emails_failed": int(failed or 0),
         "emails_pending": int(pending or 0), "inbox_unread": int(unread or 0),
-        "hot_contacts": contacts, "health": {
+        "hot_contacts": contacts, "recent_activity": recent_activity, "health": {
             "smtp": {"status": "configured"}, "imap": {"status": "configured"},
             "sheets": {"status": "ready"}, "database": {"status": "connected"},
         },

@@ -67,6 +67,30 @@ docs/FASTAPI_FREE_DEPLOYMENT.md
 
 ## Local setup
 
+### Buyer quick start with Docker
+
+This is the recommended way to run the application on a buyer's computer. It keeps the frontend, FastAPI backend, and local database together and does not require the buyer to understand the source code.
+
+1. Install Docker Desktop.
+2. Download or clone this repository.
+3. Copy `.env.example` to `.env` in the project root and keep `MAIL_DRY_RUN=true` while testing.
+4. Start the application:
+
+```powershell
+docker compose up --build
+```
+
+5. Open `http://localhost:5173`.
+6. Configure the buyer's SMTP, IMAP, WhatsApp, or Google settings in the root `.env`, then restart:
+
+```powershell
+docker compose up -d --build
+```
+
+To stop the application, run `docker compose down`. The local SQLite data remains in the Docker volume unless the volume is explicitly removed.
+
+The Docker setup exposes the React application on port `5173` and FastAPI on port `8000`. Provider credentials are read from environment variables and are never included in the image.
+
 ### Backend
 
 Use Python 3.13 or a compatible Python 3.11+ environment:
