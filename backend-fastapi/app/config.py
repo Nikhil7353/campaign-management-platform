@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     imap_port: int = 993
     imap_username: str = ""
     imap_password: str = ""
+    inbox_auto_sync_enabled: bool = False
+    inbox_auto_sync_interval_seconds: int = 300
     whatsapp_base_url: str = ""
     whatsapp_access_token: str = ""
     whatsapp_api_version: str = "v23.0"

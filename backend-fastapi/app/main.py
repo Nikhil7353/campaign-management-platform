@@ -1,13 +1,18 @@
+from contextlib import asynccontextmanager
 import csv
 import hashlib
 import io
 import json
+import re
 import uuid
 import zipfile
 import xml.etree.ElementTree as ET
 import secrets
 from datetime import datetime, timezone
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, unquote, urlparse
+from urllib.request import Request, urlopen
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,10 +21,39 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import SessionLocal, get_db, init_db
-from .services import dashboard, google_authorization_url, google_exchange_code, inbox, process_email_queue, rows, send_email, send_whatsapp_cloud, sent, sync_inbox, whatsapp_overview, whatsapp_request
+from .scheduler import InboxSyncScheduler
+from .services import (
+    dashboard,
+    get_sync_settings,
+    google_authorization_url,
+    google_exchange_code,
+    inbox,
+    process_email_queue,
+    rows,
+    run_inbox_sync,
+    save_sync_settings,
+    send_email,
+    send_whatsapp_cloud,
+    sent,
+    whatsapp_overview,
+    whatsapp_request,
+)
 
 settings = get_settings()
-app = FastAPI(title=settings.app_name, version="1.0.0")
+sync_scheduler = InboxSyncScheduler()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    sync_scheduler.start()
+    try:
+        yield
+    finally:
+        sync_scheduler.stop()
+
+
+app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_origin], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 init_db()
 
@@ -50,29 +84,222 @@ def whatsapp_cloud_config(db: Session) -> tuple[str, str, str, str]:
     return settings.whatsapp_phone_number_id, settings.whatsapp_access_token, settings.whatsapp_api_version, settings.whatsapp_verify_token
 
 
+MAX_SHEET_UPLOAD_BYTES = 10 * 1024 * 1024
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+_TEMPLATE_TOKEN_RE = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+
+
+def _excel_col_index(cell_ref: str | None) -> int | None:
+    if not cell_ref:
+        return None
+    letters = "".join(ch for ch in cell_ref if ch.isalpha()).upper()
+    if not letters:
+        return None
+    index = 0
+    for ch in letters:
+        index = index * 26 + (ord(ch) - ord("A") + 1)
+    return index - 1
+
+
 def parse_xlsx(content: bytes) -> list[dict[str, str]]:
     """Read the first worksheet from XLSX using the standard library."""
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
-        shared = []
-        if 'xl/sharedStrings.xml' in archive.namelist():
-            root = ET.fromstring(archive.read('xl/sharedStrings.xml'))
-            shared = [''.join(node.itertext()) for node in root]
-        sheet_name = 'xl/worksheets/sheet1.xml'
+        shared: list[str] = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+            shared = ["".join(node.itertext()) for node in root]
+        sheet_name = "xl/worksheets/sheet1.xml"
+        if sheet_name not in archive.namelist():
+            candidates = sorted(n for n in archive.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml"))
+            if not candidates:
+                return []
+            sheet_name = candidates[0]
         root = ET.fromstring(archive.read(sheet_name))
         matrix: list[list[str]] = []
-        for row in root.findall('.//{*}row'):
-            values = []
-            for cell in row.findall('{*}c'):
-                value = cell.find('{*}v')
-                text_value = '' if value is None else value.text or ''
-                if cell.get('t') == 's' and text_value.isdigit():
-                    text_value = shared[int(text_value)] if int(text_value) < len(shared) else text_value
-                values.append(text_value)
-            matrix.append(values)
+        for row in root.findall(".//{*}row"):
+            values: list[str] = []
+            for cell in row.findall("{*}c"):
+                col_idx = _excel_col_index(cell.get("r"))
+                cell_type = cell.get("t")
+                if cell_type == "inlineStr":
+                    inline = cell.find("{*}is")
+                    text_value = "".join(inline.itertext()) if inline is not None else ""
+                else:
+                    value = cell.find("{*}v")
+                    text_value = "" if value is None else value.text or ""
+                    if cell_type == "s" and text_value.isdigit():
+                        idx = int(text_value)
+                        text_value = shared[idx] if idx < len(shared) else text_value
+                if col_idx is not None:
+                    while len(values) < col_idx:
+                        values.append("")
+                    if col_idx < len(values):
+                        values[col_idx] = text_value
+                    else:
+                        values.append(text_value)
+                else:
+                    values.append(text_value)
+            if any(str(v).strip() for v in values):
+                matrix.append(values)
     if not matrix:
         return []
-    headers = [value or f'column_{index + 1}' for index, value in enumerate(matrix[0])]
-    return [dict(zip(headers, row + [''] * (len(headers) - len(row)))) for row in matrix[1:]]
+    width = max(len(r) for r in matrix)
+    raw_headers = matrix[0] + [""] * (width - len(matrix[0]))
+    headers: list[str] = []
+    seen: dict[str, int] = {}
+    for index, raw in enumerate(raw_headers):
+        base = str(raw).strip() or f"column_{index + 1}"
+        count = seen.get(base, 0)
+        seen[base] = count + 1
+        headers.append(base if count == 0 else f"{base}_{count + 1}")
+    parsed: list[dict[str, str]] = []
+    for row in matrix[1:]:
+        padded = row + [""] * (len(headers) - len(row))
+        record = {headers[i]: str(padded[i]).strip() for i in range(len(headers))}
+        if any(record.values()):
+            parsed.append(record)
+    return parsed
+
+
+def parse_csv(content: bytes) -> list[dict[str, str]]:
+    try:
+        decoded = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        decoded = content.decode("latin-1")
+    reader = csv.DictReader(io.StringIO(decoded))
+    if not reader.fieldnames:
+        return []
+    headers: list[str] = []
+    seen: dict[str, int] = {}
+    for index, raw in enumerate(reader.fieldnames):
+        base = (raw or "").strip() or f"column_{index + 1}"
+        count = seen.get(base, 0)
+        seen[base] = count + 1
+        headers.append(base if count == 0 else f"{base}_{count + 1}")
+    parsed: list[dict[str, str]] = []
+    for raw_row in reader:
+        record: dict[str, str] = {}
+        for orig_key, clean_key in zip(reader.fieldnames, headers):
+            val = raw_row.get(orig_key)
+            record[clean_key] = "" if val is None else str(val).strip()
+        if any(record.values()):
+            parsed.append(record)
+    return parsed
+
+
+def _sheet_columns(records: list[dict[str, Any]]) -> list[str]:
+    columns: list[str] = []
+    for record in records[:20]:
+        if isinstance(record, dict):
+            for key in record.keys():
+                key_str = str(key)
+                if key_str not in columns:
+                    columns.append(key_str)
+    return columns
+
+
+def _render_sheet_template(template: str, row: dict[str, Any]) -> str:
+    lower_map = {str(k).strip().lower(): "" if v is None else str(v).strip() for k, v in row.items()}
+
+    def replace(match: re.Match[str]) -> str:
+        token = match.group(1).strip()
+        if token in row and row[token] is not None:
+            return str(row[token]).strip()
+        return lower_map.get(token.lower(), "")
+
+    return _TEMPLATE_TOKEN_RE.sub(replace, template).strip()
+
+
+_GOOGLE_SHEET_URL_RE = re.compile(r"/spreadsheets/(?:u/\d+/)?d/([A-Za-z0-9-_]{20,})")
+_GOOGLE_SHEET_ID_RE = re.compile(r"^[A-Za-z0-9-_]{20,}$")
+
+
+def extract_google_sheet_ref(url_or_id: str) -> tuple[str, str]:
+    raw = (url_or_id or "").strip()
+    if not raw:
+        raise ValueError("Paste a Google Sheets URL or spreadsheet ID")
+    if _GOOGLE_SHEET_ID_RE.match(raw):
+        return raw, "0"
+    parsed = urlparse(raw)
+    if parsed.scheme not in ("http", "https") or parsed.netloc.lower() not in ("docs.google.com", "www.docs.google.com"):
+        raise ValueError("Enter a valid Google Sheets URL (https://docs.google.com/spreadsheets/d/...)")
+    match = _GOOGLE_SHEET_URL_RE.search(parsed.path or "")
+    if not match:
+        raise ValueError("Could not find a Google Spreadsheet ID in that URL")
+    sheet_id = match.group(1)
+    gid = "0"
+    for source in (parsed.query, parsed.fragment):
+        params = parse_qs(source or "")
+        if "gid" in params and params["gid"] and params["gid"][0].isdigit():
+            gid = params["gid"][0]
+            break
+    return sheet_id, gid
+
+
+def fetch_google_sheet_csv(spreadsheet_id: str, gid: str = "0", access_token: str | None = None) -> tuple[bytes, str]:
+    export_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid={gid}"
+    headers = {"Accept": "text/csv,text/plain;q=0.9,*/*;q=0.8", "User-Agent": "CommunicationDesk/1.0"}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    req = Request(export_url, headers=headers, method="GET")
+    try:
+        with urlopen(req, timeout=20) as resp:
+            final_url = resp.geturl()
+            content_type = str(resp.headers.get("Content-Type", "")).lower()
+            if "accounts.google.com" in final_url or "text/html" in content_type:
+                raise ValueError(
+                    "This Google Sheet is private. Share it as 'Anyone with the link (Viewer)' or connect Google Sheets OAuth."
+                )
+            content = resp.read(MAX_SHEET_UPLOAD_BYTES + 1)
+            if len(content) > MAX_SHEET_UPLOAD_BYTES:
+                raise ValueError("Google Sheet exceeds the 10 MB import limit")
+            disposition = str(resp.headers.get("Content-Disposition", ""))
+            filename = ""
+            utf8_match = re.search(r"filename\*=UTF-8''([^;]+)", disposition, re.IGNORECASE)
+            if utf8_match:
+                filename = unquote(utf8_match.group(1)).strip()
+            else:
+                plain_match = re.search(r'filename="?([^";]+)"?', disposition, re.IGNORECASE)
+                if plain_match:
+                    filename = plain_match.group(1).strip()
+            return content, filename or f"Google Sheet ({spreadsheet_id[:8]}).csv"
+    except HTTPError as exc:
+        if exc.code in (401, 403):
+            raise ValueError(
+                "This Google Sheet is private. Share it as 'Anyone with the link (Viewer)' or connect Google Sheets OAuth."
+            ) from exc
+        if exc.code == 404:
+            raise ValueError("Google Sheet not found. Check the link and tab (gid).") from exc
+        raise ValueError(f"Google Sheets returned HTTP {exc.code}") from exc
+    except URLError as exc:
+        raise ValueError(f"Could not reach Google Sheets: {exc.reason}") from exc
+
+
+def parse_pasted_table(raw_text: str) -> list[dict[str, str]]:
+    cleaned = (raw_text or "").strip("\r\n")
+    if not cleaned.strip():
+        return []
+    first_line = next((line for line in cleaned.splitlines() if line.strip()), "")
+    delimiter = "\t" if "\t" in first_line else ","
+    reader = csv.DictReader(io.StringIO(cleaned), delimiter=delimiter)
+    if not reader.fieldnames:
+        return []
+    headers: list[str] = []
+    seen: dict[str, int] = {}
+    for index, raw in enumerate(reader.fieldnames):
+        base = (raw or "").strip() or f"column_{index + 1}"
+        count = seen.get(base, 0)
+        seen[base] = count + 1
+        headers.append(base if count == 0 else f"{base}_{count + 1}")
+    parsed: list[dict[str, str]] = []
+    for raw_row in reader:
+        record: dict[str, str] = {}
+        for orig_key, clean_key in zip(reader.fieldnames, headers):
+            val = raw_row.get(orig_key)
+            record[clean_key] = "" if val is None else str(val).strip()
+        if any(record.values()):
+            parsed.append(record)
+    return parsed
 
 
 @app.get("/api/health")
@@ -114,8 +341,14 @@ def toggle_read(email_id: int, db: Session = Depends(get_db)) -> dict[str, bool]
 
 
 @app.get("/api/emails")
-def get_emails(db: Session = Depends(get_db), limit: int = Query(25, ge=1, le=100), offset: int = Query(0, ge=0)) -> dict[str, Any]:
-    return sent(db, limit, offset)
+def get_emails(
+    db: Session = Depends(get_db),
+    status: str = "",
+    search: str = "",
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    return sent(db, status=status, search=search, limit=limit, offset=offset)
 
 
 @app.get("/api/emails/{email_id}")
@@ -131,8 +364,19 @@ def dispatch_email(email_id: int, db: Session = Depends(get_db)) -> dict[str, An
     try:
         return send_email(db, email_id)
     except ValueError as exc:
+        if str(exc) != "Email not found":
+            db.execute(
+                text("UPDATE emails SET status='failed', error=:error, attempts=attempts+1, updated_at=:updated WHERE id=:id"),
+                {"error": str(exc), "updated": now(), "id": email_id},
+            )
+            db.commit()
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
+        db.execute(
+            text("UPDATE emails SET status='failed', error=:error, attempts=attempts+1, updated_at=:updated WHERE id=:id"),
+            {"error": str(exc), "updated": now(), "id": email_id},
+        )
+        db.commit()
         raise HTTPException(502, str(exc)) from exc
 
 
@@ -144,9 +388,57 @@ def process_email_worker(limit: int = Query(25, ge=1, le=100), db: Session = Dep
 @app.post("/api/workers/sync-inbox")
 def sync_inbox_worker(limit: int = Query(30, ge=1, le=100), db: Session = Depends(get_db)) -> dict[str, Any]:
     try:
-        return sync_inbox(db, limit)
+        return run_inbox_sync(db, limit=limit, trigger="manual")
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(502, str(exc)) from exc
+    finally:
+        sync_scheduler.notify()
+
+
+@app.get("/api/settings/sync")
+def get_inbox_sync_settings(db: Session = Depends(get_db)) -> dict[str, Any]:
+    return get_sync_settings(db)
+
+
+@app.post("/api/settings/sync")
+def update_inbox_sync_settings(request: dict[str, Any], db: Session = Depends(get_db)) -> dict[str, Any]:
+    data = payload(request)
+    enabled = data.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise HTTPException(422, "enabled must be a boolean")
+    interval_raw = data.get("interval_seconds")
+    interval_seconds: int | None = None
+    if interval_raw is not None:
+        if isinstance(interval_raw, bool):
+            raise HTTPException(422, "interval_seconds must be an integer")
+        try:
+            interval_seconds = int(interval_raw)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, "interval_seconds must be an integer") from exc
+    try:
+        updated = save_sync_settings(db, enabled=enabled, interval_seconds=interval_seconds)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    sync_scheduler.notify()
+    return updated
+
+
+@app.post("/api/settings/sync/run")
+def run_manual_inbox_sync(limit: int = Query(30, ge=1, le=100), db: Session = Depends(get_db)) -> dict[str, Any]:
+    try:
+        return run_inbox_sync(db, limit=limit, trigger="manual")
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, str(exc)) from exc
+    finally:
+        sync_scheduler.notify()
 
 
 @app.post("/api/emails")
@@ -288,14 +580,173 @@ def save_whatsapp_settings(request: dict[str, Any], db: Session = Depends(get_db
 @app.get("/api/sheets")
 def get_sheets(db: Session = Depends(get_db)) -> dict[str, Any]:
     sources = rows(db, "SELECT * FROM sheet_sources ORDER BY created_at DESC")
-    uploads = rows(db, "SELECT id, title, created_at FROM uploaded_sheets ORDER BY created_at DESC")
+    raw_uploads = rows(db, "SELECT id, title, workbook, created_at FROM uploaded_sheets ORDER BY created_at DESC")
+    uploads = []
+    for item in raw_uploads:
+        try:
+            records = json.loads(item.get("workbook") or "[]")
+            if not isinstance(records, list):
+                records = []
+        except json.JSONDecodeError:
+            records = []
+        uploads.append({
+            "id": item["id"],
+            "title": item["title"],
+            "created_at": item["created_at"],
+            "row_count": len(records),
+            "columns": _sheet_columns(records),
+        })
     return {"sources": sources, "uploads": uploads}
+
+
+@app.get("/api/sheets/{sheet_id}")
+def get_sheet_detail(
+    sheet_id: str,
+    db: Session = Depends(get_db),
+    limit: int = Query(25, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    item = rows(db, "SELECT id, title, workbook, created_at FROM uploaded_sheets WHERE id = :id", {"id": sheet_id})
+    if not item:
+        raise HTTPException(404, "Uploaded sheet not found")
+    record = item[0]
+    try:
+        all_rows = json.loads(record.get("workbook") or "[]")
+        if not isinstance(all_rows, list):
+            all_rows = []
+    except json.JSONDecodeError:
+        all_rows = []
+    return {
+        "id": record["id"],
+        "title": record["title"],
+        "created_at": record["created_at"],
+        "columns": _sheet_columns(all_rows),
+        "total": len(all_rows),
+        "rows": all_rows[offset : offset + limit],
+    }
+
+
+@app.delete("/api/sheets/{sheet_id}")
+def delete_sheet(sheet_id: str, db: Session = Depends(get_db)) -> dict[str, bool]:
+    existing = rows(db, "SELECT id FROM uploaded_sheets WHERE id = :id", {"id": sheet_id})
+    if not existing:
+        raise HTTPException(404, "Uploaded sheet not found")
+    db.execute(text("DELETE FROM uploaded_sheets WHERE id = :id"), {"id": sheet_id})
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/sheets/{sheet_id}/queue")
+def queue_sheet_campaign(sheet_id: str, request: dict[str, Any], db: Session = Depends(get_db)) -> dict[str, Any]:
+    item = rows(db, "SELECT id, title, workbook FROM uploaded_sheets WHERE id = :id", {"id": sheet_id})
+    if not item:
+        raise HTTPException(404, "Uploaded sheet not found")
+    try:
+        records = json.loads(item[0].get("workbook") or "[]")
+        if not isinstance(records, list):
+            records = []
+    except json.JSONDecodeError:
+        records = []
+    if not records:
+        raise HTTPException(422, "Sheet contains no rows to queue")
+
+    data = payload(request)
+    channel = str(data.get("channel") or "email").strip().lower()
+    recipient_col = str(data.get("recipient_column") or "").strip()
+    if not recipient_col:
+        raise HTTPException(422, "recipient_column is required")
+
+    created = now()
+    queued = 0
+    already_queued = 0
+    skipped = 0
+    errors: list[str] = []
+
+    if channel == "whatsapp":
+        message_col = str(data.get("message_column") or "").strip()
+        message_tpl = str(data.get("message_template") or "").strip()
+        if not message_col and not message_tpl:
+            raise HTTPException(422, "Select a message column or provide a message template")
+        for idx, row in enumerate(records, start=1):
+            recipient = str(row.get(recipient_col, "") or "").strip()
+            message = _render_sheet_template(message_tpl, row) if message_tpl else str(row.get(message_col, "") or "").strip()
+            if not recipient or not message:
+                skipped += 1
+                if len(errors) < 10:
+                    errors.append(f"Row {idx}: missing recipient or message")
+                continue
+            db.execute(
+                text("INSERT INTO whatsapp_sends (recipient,message,status,device_id,created_at) VALUES (:recipient,:message,'queued',NULL,:created)"),
+                {"recipient": recipient, "message": message, "created": created},
+            )
+            queued += 1
+        db.commit()
+        return {"channel": "whatsapp", "queued": queued, "already_queued": 0, "skipped": skipped, "total_rows": len(records), "errors": errors}
+
+    if channel != "email":
+        raise HTTPException(422, "channel must be 'email' or 'whatsapp'")
+
+    subject_col = str(data.get("subject_column") or "").strip()
+    subject_tpl = str(data.get("subject_template") or "").strip()
+    body_col = str(data.get("body_column") or "").strip()
+    body_tpl = str(data.get("body_template") or "").strip()
+    cc_col = str(data.get("cc_column") or "").strip()
+    bcc_col = str(data.get("bcc_column") or "").strip()
+
+    if not subject_col and not subject_tpl:
+        raise HTTPException(422, "Select a subject column or provide a subject template")
+    if not body_col and not body_tpl:
+        raise HTTPException(422, "Select a body column or provide a message template")
+
+    for idx, row in enumerate(records, start=1):
+        recipient = str(row.get(recipient_col, "") or "").strip()
+        subject = _render_sheet_template(subject_tpl, row) if subject_tpl else str(row.get(subject_col, "") or "").strip()
+        body = _render_sheet_template(body_tpl, row) if body_tpl else str(row.get(body_col, "") or "").strip()
+        cc = str(row.get(cc_col, "") or "").strip() if cc_col else ""
+        bcc = str(row.get(bcc_col, "") or "").strip() if bcc_col else ""
+
+        if not recipient or not _EMAIL_RE.match(recipient):
+            skipped += 1
+            if len(errors) < 10:
+                errors.append(f"Row {idx}: invalid recipient email '{recipient or '(empty)'}'")
+            continue
+        if not subject or not body:
+            skipped += 1
+            if len(errors) < 10:
+                errors.append(f"Row {idx}: missing subject or body")
+            continue
+
+        key = hashlib.sha256(f"{recipient}|{subject}|{body}".encode()).hexdigest()
+        if rows(db, "SELECT id FROM emails WHERE idempotency_key = :key", {"key": key}):
+            already_queued += 1
+            continue
+        db.execute(
+            text("""INSERT INTO emails (recipient,cc,bcc,subject,body,status,idempotency_key,created_at,updated_at)
+                VALUES (:recipient,:cc,:bcc,:subject,:body,'pending',:key,:created,:created)"""),
+            {"recipient": recipient, "cc": cc, "bcc": bcc, "subject": subject[:255], "body": body, "key": key, "created": created},
+        )
+        queued += 1
+
+    if queued:
+        db.execute(
+            text("INSERT INTO activity (email_id, action, detail, created_at) VALUES (NULL, 'sheet_queued', :detail, :created)"),
+            {"detail": f"{item[0]['title']}: {queued} queued", "created": created},
+        )
+    db.commit()
+    return {
+        "channel": "email",
+        "queued": queued,
+        "already_queued": already_queued,
+        "skipped": skipped,
+        "total_rows": len(records),
+        "errors": errors,
+    }
 
 
 @app.get("/api/google/status")
 def google_status(db: Session = Depends(get_db)) -> dict[str, Any]:
     connected = bool(rows(db, "SELECT id FROM google_connection WHERE id = 1"))
-    return {"configured": bool(settings.google_client_id and settings.google_client_secret), "connected": connected, "upload_limit": 10 * 1024 * 1024}
+    return {"configured": bool(settings.google_client_id and settings.google_client_secret), "connected": connected, "upload_limit": MAX_SHEET_UPLOAD_BYTES}
 
 
 @app.post("/api/google/connect")
@@ -321,21 +772,115 @@ def google_disconnect(db: Session = Depends(get_db)) -> dict[str, bool]:
 
 
 @app.post("/api/sheets/upload")
-async def upload_sheet(file: UploadFile = File(...)) -> dict[str, str]:
+async def upload_sheet(file: UploadFile = File(...), db: Session = Depends(get_db)) -> dict[str, Any]:
     if not file.filename or not file.filename.lower().endswith((".csv", ".xlsx")):
         raise HTTPException(422, "Upload a CSV or XLSX file")
     content = await file.read()
-    if file.filename.lower().endswith('.csv'):
-        decoded = content.decode('utf-8-sig')
-        parsed = list(csv.DictReader(io.StringIO(decoded)))
+    if len(content) > MAX_SHEET_UPLOAD_BYTES:
+        raise HTTPException(422, "File exceeds the 10 MB upload limit")
+    if file.filename.lower().endswith(".csv"):
+        try:
+            parsed = parse_csv(content)
+        except csv.Error as exc:
+            raise HTTPException(422, f"Could not read CSV file: {exc}") from exc
     else:
         try:
             parsed = parse_xlsx(content)
         except (KeyError, ET.ParseError, zipfile.BadZipFile) as exc:
             raise HTTPException(422, f"Could not read XLSX file: {exc}") from exc
+    if not parsed:
+        raise HTTPException(422, "Spreadsheet contains no data rows")
     source_id = str(uuid.uuid4())
-    with SessionLocal() as db:
-        db.execute(text("INSERT INTO uploaded_sheets (id,title,workbook,created_at) VALUES (:id,:title,:workbook,:created)"), {"id": source_id, "title": file.filename, "workbook": json.dumps(parsed), "created": now()})
-        db.commit()
-    return {"status": "accepted", "filename": file.filename, "id": source_id, "rows": str(len(parsed))}
+    db.execute(
+        text("INSERT INTO uploaded_sheets (id,title,workbook,created_at) VALUES (:id,:title,:workbook,:created)"),
+        {"id": source_id, "title": file.filename, "workbook": json.dumps(parsed), "created": now()},
+    )
+    db.commit()
+    return {
+        "status": "accepted",
+        "filename": file.filename,
+        "id": source_id,
+        "rows": len(parsed),
+        "columns": _sheet_columns(parsed),
+    }
+
+
+@app.post("/api/sheets/import-google-url")
+def import_google_sheet_url(request: dict[str, Any], db: Session = Depends(get_db)) -> dict[str, Any]:
+    data = payload(request)
+    url = str(data.get("url") or "").strip()
+    custom_title = str(data.get("title") or "").strip()
+    try:
+        spreadsheet_id, gid = extract_google_sheet_ref(url)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    access_token: str | None = None
+    conn = rows(db, "SELECT token_data FROM google_connection WHERE id = 1")
+    if conn:
+        try:
+            token_obj = json.loads(conn[0].get("token_data") or "{}")
+            access_token = str(token_obj.get("access_token") or "") or None
+        except json.JSONDecodeError:
+            access_token = None
+
+    try:
+        content, detected_name = fetch_google_sheet_csv(spreadsheet_id, gid=gid, access_token=access_token)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    try:
+        parsed = parse_csv(content)
+    except csv.Error as exc:
+        raise HTTPException(422, f"Could not parse Google Sheet CSV: {exc}") from exc
+    if not parsed:
+        raise HTTPException(422, "Google Sheet contains no data rows")
+
+    title = custom_title or detected_name
+    source_id = str(uuid.uuid4())
+    db.execute(
+        text("INSERT INTO uploaded_sheets (id,title,workbook,created_at) VALUES (:id,:title,:workbook,:created)"),
+        {"id": source_id, "title": title, "workbook": json.dumps(parsed), "created": now()},
+    )
+    db.commit()
+    return {
+        "status": "accepted",
+        "filename": title,
+        "id": source_id,
+        "rows": len(parsed),
+        "columns": _sheet_columns(parsed),
+        "spreadsheet_id": spreadsheet_id,
+        "gid": gid,
+    }
+
+
+@app.post("/api/sheets/import-paste")
+def import_pasted_sheet(request: dict[str, Any], db: Session = Depends(get_db)) -> dict[str, Any]:
+    data = payload(request)
+    raw_text = str(data.get("text") or "")
+    title = str(data.get("title") or "").strip() or f"Pasted Sheet ({datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')})"
+    if not raw_text.strip():
+        raise HTTPException(422, "Paste rows copied from Google Sheets or CSV")
+    if len(raw_text.encode("utf-8")) > MAX_SHEET_UPLOAD_BYTES:
+        raise HTTPException(422, "Pasted data exceeds the 10 MB limit")
+    try:
+        parsed = parse_pasted_table(raw_text)
+    except csv.Error as exc:
+        raise HTTPException(422, f"Could not read pasted table: {exc}") from exc
+    if not parsed:
+        raise HTTPException(422, "Need at least 1 header row and 1 data row")
+
+    source_id = str(uuid.uuid4())
+    db.execute(
+        text("INSERT INTO uploaded_sheets (id,title,workbook,created_at) VALUES (:id,:title,:workbook,:created)"),
+        {"id": source_id, "title": title, "workbook": json.dumps(parsed), "created": now()},
+    )
+    db.commit()
+    return {
+        "status": "accepted",
+        "filename": title,
+        "id": source_id,
+        "rows": len(parsed),
+        "columns": _sheet_columns(parsed),
+    }
 

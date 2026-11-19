@@ -19,7 +19,7 @@
  .dashboard-kpis,.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
  .email-dashboard-header h1,.page-header h1{font-size:30px}
  .health-grid{grid-template-columns:1fr}
- .sent-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}.sent-snippet{display:none}
+ .sent-row{grid-template-columns:minmax(120px,1fr) minmax(0,1.6fr) auto auto;gap:12px}
 }
 @media(max-width:650px){
  .app-shell{display:block;overflow:visible}
@@ -48,9 +48,9 @@
  .floating-form input,.floating-form textarea{font-size:16px}
  .floating-title button,.compose-address button{min-width:44px;min-height:44px}
  .floating-form textarea{min-height:140px;height:30dvh}.expanded .floating-form textarea{height:45dvh}
- .sent-toolbar{gap:10px;flex-wrap:wrap}.sent-toolbar input{width:100%;flex-basis:100%}
+ .sent-toolbar,.sent-search{gap:10px;flex-wrap:wrap}.sent-toolbar input,.sent-search input{width:100%;flex-basis:100%}
  .sent-row{grid-template-columns:minmax(0,1fr) auto;gap:7px;padding:14px 4px}
- .sent-row>span:first-child{grid-column:1}.sent-row>strong{grid-column:1;grid-row:2}.sent-row time{grid-column:2;grid-row:1;font-size:11px}
+ .sent-recipient{grid-column:1;grid-row:1}.sent-status-badge{grid-column:2;grid-row:1;justify-self:end}.sent-subject{grid-column:1 / -1;grid-row:2}.sent-row time{grid-column:1 / -1;grid-row:3;font-size:11px}
  .quiet,.primary{min-height:44px}
 }
 @media(max-width:360px){.dashboard-kpis,.kpi-grid{grid-template-columns:minmax(0,1fr)}.sidebar-nav{grid-template-columns:1fr}}

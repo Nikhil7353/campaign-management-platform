@@ -89,6 +89,17 @@ def init_db() -> None:
         """CREATE TABLE IF NOT EXISTS whatsapp_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, direction VARCHAR(12) NOT NULL,
             body TEXT NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'sent', created_at VARCHAR(64) NOT NULL)""",
+        """CREATE TABLE IF NOT EXISTS inbox_sync_settings (
+            id INTEGER PRIMARY KEY,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            interval_seconds INTEGER NOT NULL DEFAULT 300,
+            last_sync_at VARCHAR(64),
+            last_status VARCHAR(32) NOT NULL DEFAULT 'idle',
+            last_error TEXT NOT NULL DEFAULT '',
+            last_new_count INTEGER NOT NULL DEFAULT 0,
+            last_total_inbox INTEGER NOT NULL DEFAULT 0,
+            last_trigger VARCHAR(32) NOT NULL DEFAULT '',
+            updated_at VARCHAR(64) NOT NULL)""",
     ]
     with engine.begin() as conn:
         for statement in statements:

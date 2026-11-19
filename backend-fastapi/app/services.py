@@ -2,10 +2,12 @@ from datetime import datetime, timedelta, timezone
 from email import policy
 from email.header import decode_header, make_header
 from email.parser import BytesParser
-from email.utils import formatdate, make_msgid, parseaddr
+from email.utils import formatdate, make_msgid, parseaddr, parsedate_to_datetime
 import imaplib
+import re
 import smtplib
 import ssl
+import threading
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -60,18 +62,47 @@ def inbox(db: Session, unread: str = "", search: str = "", limit: int = 25, offs
     if unread == "unread": clauses.append("is_read = 0")
     if unread == "read": clauses.append("is_read = 1")
     if search:
-        clauses.append("(from_email LIKE :search OR subject LIKE :search OR body LIKE :search)")
+        clauses.append("(from_name LIKE :search OR from_email LIKE :search OR subject LIKE :search OR body LIKE :search)")
         params["search"] = f"%{search}%"
     where = " AND ".join(clauses)
     items = rows(db, f"SELECT * FROM inbox_emails WHERE {where} ORDER BY received_at DESC LIMIT :limit OFFSET :offset", params)
     total = rows(db, f"SELECT COUNT(*) AS value FROM inbox_emails WHERE {where}", params)[0].get("value", 0)
-    return {"emails": items, "total": int(total or 0), "unread_count": len(rows(db, "SELECT id FROM inbox_emails WHERE is_read = 0 AND COALESCE(archived_at, '') = ''"))}
+    unread_total = rows(db, "SELECT COUNT(*) AS value FROM inbox_emails WHERE is_read = 0 AND COALESCE(archived_at, '') = ''")[0].get("value", 0)
+    return {"emails": items, "total": int(total or 0), "unread_count": int(unread_total or 0)}
 
 
-def sent(db: Session, limit: int = 25, offset: int = 0) -> dict[str, Any]:
-    items = rows(db, "SELECT * FROM emails ORDER BY created_at DESC LIMIT :limit OFFSET :offset", {"limit": limit, "offset": offset})
-    total = rows(db, "SELECT COUNT(*) AS value FROM emails")[0].get("value", 0)
-    return {"emails": items, "total": int(total or 0)}
+def sent(db: Session, status: str = "", search: str = "", limit: int = 25, offset: int = 0) -> dict[str, Any]:
+    clauses: list[str] = []
+    params: dict[str, Any] = {"limit": limit, "offset": offset}
+    normalized_status = (status or "").strip().lower()
+    if normalized_status == "sent":
+        clauses.append("status IN ('sent', 'delivered')")
+    elif normalized_status == "pending":
+        clauses.append("status IN ('pending', 'processing')")
+    elif normalized_status == "failed":
+        clauses.append("status IN ('failed', 'bounced')")
+    elif normalized_status == "dry_run":
+        clauses.append("status = 'dry_run'")
+    if search:
+        clauses.append("(recipient LIKE :search OR cc LIKE :search OR bcc LIKE :search OR subject LIKE :search OR body LIKE :search)")
+        params["search"] = f"%{search}%"
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    items = rows(
+        db,
+        f"SELECT * FROM emails {where} ORDER BY COALESCE(sent_at, created_at) DESC, id DESC LIMIT :limit OFFSET :offset",
+        params,
+    )
+    total = rows(db, f"SELECT COUNT(*) AS value FROM emails {where}", params)[0].get("value", 0)
+    status_rows = rows(db, "SELECT status, COUNT(*) AS value FROM emails GROUP BY status")
+    raw_counts = {str(r.get("status") or ""): int(r.get("value") or 0) for r in status_rows}
+    counts = {
+        "all": sum(raw_counts.values()),
+        "sent": raw_counts.get("sent", 0) + raw_counts.get("delivered", 0),
+        "pending": raw_counts.get("pending", 0) + raw_counts.get("processing", 0),
+        "failed": raw_counts.get("failed", 0) + raw_counts.get("bounced", 0),
+        "dry_run": raw_counts.get("dry_run", 0),
+    }
+    return {"emails": items, "total": int(total or 0), "counts": counts}
 
 
 def whatsapp_overview(db: Session, days: int = 7) -> dict[str, Any]:
@@ -119,7 +150,7 @@ def send_email(db: Session, email_id: int) -> dict[str, Any]:
                 smtp.starttls(context=ssl.create_default_context()); smtp.login(settings["user"], settings["password"]); smtp.send_message(message)
         status = "sent"
     timestamp = now_iso()
-    db.execute(text("UPDATE emails SET status=:status, message_id=:message_id, sent_at=:sent_at, updated_at=:updated_at, attempts=attempts+1 WHERE id=:id"), {"status": status, "message_id": message_id, "sent_at": timestamp, "updated_at": timestamp, "id": email_id})
+    db.execute(text("UPDATE emails SET status=:status, error=NULL, message_id=:message_id, sent_at=:sent_at, updated_at=:updated_at, attempts=attempts+1 WHERE id=:id"), {"status": status, "message_id": message_id, "sent_at": timestamp, "updated_at": timestamp, "id": email_id})
     db.execute(text("INSERT INTO activity (email_id, action, detail, created_at) VALUES (:id, 'email_sent', :detail, :created)"), {"id": email_id, "detail": status, "created": timestamp})
     db.commit()
     return {"id": email_id, "status": status, "message_id": message_id}
@@ -141,28 +172,288 @@ def _decode_header(value: str | None) -> str:
     except Exception: return value
 
 
+MIN_SYNC_INTERVAL_SECONDS = 30
+MAX_SYNC_INTERVAL_SECONDS = 86400
+_SYNC_LOCK = threading.Lock()
+
+
+def imap_configured() -> bool:
+    from .config import get_settings
+    s = get_settings()
+    return bool(s.imap_host and s.imap_username and s.imap_password)
+
+
+def _clamp_sync_interval(value: int) -> int:
+    return max(MIN_SYNC_INTERVAL_SECONDS, min(MAX_SYNC_INTERVAL_SECONDS, int(value)))
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _read_sync_row(db: Session) -> dict[str, Any]:
+    from .config import get_settings
+    s = get_settings()
+    saved = rows(db, "SELECT * FROM inbox_sync_settings WHERE id = 1")
+    if saved:
+        row = saved[0]
+        return {
+            "enabled": bool(row.get("enabled", 0)),
+            "interval_seconds": _clamp_sync_interval(int(row.get("interval_seconds") or s.inbox_auto_sync_interval_seconds)),
+            "last_sync_at": row.get("last_sync_at") or None,
+            "last_status": str(row.get("last_status") or "idle"),
+            "last_error": str(row.get("last_error") or ""),
+            "last_new_count": int(row.get("last_new_count") or 0),
+            "last_total_inbox": int(row.get("last_total_inbox") or 0),
+            "last_trigger": str(row.get("last_trigger") or ""),
+            "updated_at": row.get("updated_at") or None,
+        }
+    return {
+        "enabled": bool(s.inbox_auto_sync_enabled),
+        "interval_seconds": _clamp_sync_interval(s.inbox_auto_sync_interval_seconds),
+        "last_sync_at": None,
+        "last_status": "idle",
+        "last_error": "",
+        "last_new_count": 0,
+        "last_total_inbox": 0,
+        "last_trigger": "",
+        "updated_at": None,
+    }
+
+
+def get_sync_settings(db: Session) -> dict[str, Any]:
+    state = _read_sync_row(db)
+    is_running = _SYNC_LOCK.locked()
+    next_sync_at: str | None = None
+    if state["enabled"] and not is_running:
+        now_dt = datetime.now(timezone.utc)
+        last_dt = _parse_iso_datetime(state["last_sync_at"])
+        if last_dt is None:
+            next_sync_at = now_dt.isoformat()
+        else:
+            target = last_dt + timedelta(seconds=state["interval_seconds"])
+            next_sync_at = max(now_dt, target).isoformat()
+    return {
+        **state,
+        "imap_configured": imap_configured(),
+        "is_running": is_running,
+        "next_sync_at": next_sync_at,
+        "min_interval_seconds": MIN_SYNC_INTERVAL_SECONDS,
+        "max_interval_seconds": MAX_SYNC_INTERVAL_SECONDS,
+    }
+
+
+def _upsert_sync_row(db: Session, values: dict[str, Any]) -> None:
+    if rows(db, "SELECT id FROM inbox_sync_settings WHERE id = 1"):
+        db.execute(
+            text("""UPDATE inbox_sync_settings
+                SET enabled=:enabled, interval_seconds=:interval_seconds,
+                    last_sync_at=:last_sync_at, last_status=:last_status,
+                    last_error=:last_error, last_new_count=:last_new_count,
+                    last_total_inbox=:last_total_inbox, last_trigger=:last_trigger,
+                    updated_at=:updated_at
+                WHERE id = 1"""),
+            values,
+        )
+    else:
+        db.execute(
+            text("""INSERT INTO inbox_sync_settings
+                (id, enabled, interval_seconds, last_sync_at, last_status, last_error,
+                 last_new_count, last_total_inbox, last_trigger, updated_at)
+                VALUES (1, :enabled, :interval_seconds, :last_sync_at, :last_status, :last_error,
+                        :last_new_count, :last_total_inbox, :last_trigger, :updated_at)"""),
+            values,
+        )
+    db.commit()
+
+
+def save_sync_settings(
+    db: Session,
+    enabled: bool | None = None,
+    interval_seconds: int | None = None,
+) -> dict[str, Any]:
+    current = _read_sync_row(db)
+    next_enabled = current["enabled"] if enabled is None else bool(enabled)
+    if interval_seconds is None:
+        next_interval = current["interval_seconds"]
+    else:
+        if isinstance(interval_seconds, bool) or not isinstance(interval_seconds, int):
+            raise ValueError("interval_seconds must be an integer")
+        if interval_seconds < MIN_SYNC_INTERVAL_SECONDS or interval_seconds > MAX_SYNC_INTERVAL_SECONDS:
+            raise ValueError(
+                f"interval_seconds must be between {MIN_SYNC_INTERVAL_SECONDS} and {MAX_SYNC_INTERVAL_SECONDS}"
+            )
+        next_interval = interval_seconds
+    _upsert_sync_row(
+        db,
+        {
+            "enabled": 1 if next_enabled else 0,
+            "interval_seconds": next_interval,
+            "last_sync_at": current["last_sync_at"],
+            "last_status": current["last_status"],
+            "last_error": current["last_error"],
+            "last_new_count": current["last_new_count"],
+            "last_total_inbox": current["last_total_inbox"],
+            "last_trigger": current["last_trigger"],
+            "updated_at": now_iso(),
+        },
+    )
+    return get_sync_settings(db)
+
+
+def _record_sync_result(
+    db: Session,
+    *,
+    status: str,
+    trigger: str,
+    error: str = "",
+    new_count: int = 0,
+    total_inbox: int = 0,
+    synced_at: str | None = None,
+) -> None:
+    current = _read_sync_row(db)
+    timestamp = synced_at or now_iso()
+    _upsert_sync_row(
+        db,
+        {
+            "enabled": 1 if current["enabled"] else 0,
+            "interval_seconds": current["interval_seconds"],
+            "last_sync_at": timestamp,
+            "last_status": status,
+            "last_error": error,
+            "last_new_count": int(new_count),
+            "last_total_inbox": int(total_inbox),
+            "last_trigger": trigger,
+            "updated_at": timestamp,
+        },
+    )
+    detail = f"{trigger} sync {status}: {new_count} new" if not error else f"{trigger} sync {status}: {error[:180]}"
+    try:
+        db.execute(
+            text("INSERT INTO activity (email_id, action, detail, created_at) VALUES (NULL, 'inbox_sync', :detail, :created)"),
+            {"detail": detail, "created": timestamp},
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+def _normalize_received_at(value: str | None) -> str:
+    if not value:
+        return now_iso()
+    try:
+        parsed = parsedate_to_datetime(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        else:
+            parsed = parsed.astimezone(timezone.utc)
+        return parsed.isoformat()
+    except (TypeError, ValueError, IndexError):
+        iso = _parse_iso_datetime(value)
+        return iso.astimezone(timezone.utc).isoformat() if iso else now_iso()
+
+
 def sync_inbox(db: Session, limit: int = 30) -> dict[str, Any]:
     from .config import get_settings
     s = get_settings()
-    if not s.imap_username or not s.imap_password:
+    if not s.imap_host or not s.imap_username or not s.imap_password:
         raise ValueError("IMAP credentials are not configured")
-    client = imaplib.IMAP4_SSL(s.imap_host, s.imap_port); client.login(s.imap_username, s.imap_password); client.select("INBOX")
-    _, data = client.uid("search", None, "ALL"); uids = [int(x) for x in data[0].split()]
-    existing = rows(db, "SELECT uid FROM inbox_emails ORDER BY uid DESC LIMIT :limit", {"limit": limit * 3}); known = {int(x["uid"]) for x in existing}; added = 0
-    for uid in reversed(uids):
-        if uid in known or added >= limit: continue
-        _, fetched = client.uid("fetch", str(uid), "(RFC822)")
-        raw = next((part[1] for part in fetched if isinstance(part, tuple)), None)
-        if not raw: continue
-        msg = BytesParser(policy=policy.default).parsebytes(raw)
-        sender_name, sender_email = parseaddr(str(msg.get("From", "")))
-        body = msg.get_body(preferencelist=("plain", "html"))
-        content = body.get_content() if body else ""
-        if body and body.get_content_type() == "text/html": content = __import__('re').sub(r"<[^>]+>", " ", content)
-        received = msg.get("Date") or now_iso()
-        db.execute(text("""INSERT INTO inbox_emails (uid,message_id,from_name,from_email,to_email,subject,body,html_body,snippet,is_read,received_at,created_at)
-            VALUES (:uid,:message_id,:from_name,:from_email,:to_email,:subject,:body,:html_body,:snippet,0,:received,:created)"""), {"uid": uid, "message_id": str(msg.get("Message-ID", "")), "from_name": _decode_header(sender_name), "from_email": sender_email, "to_email": s.imap_username, "subject": _decode_header(str(msg.get("Subject", "(No subject)"))), "body": content, "html_body": content if body and body.get_content_type() == "text/html" else "", "snippet": content[:255], "received": received, "created": now_iso()}); added += 1
-    db.commit(); client.logout(); return {"new_count": added, "total_inbox": len(uids), "synced_at": now_iso()}
+    client = imaplib.IMAP4_SSL(s.imap_host, s.imap_port, timeout=30)
+    try:
+        client.login(s.imap_username, s.imap_password)
+        client.select("INBOX")
+        _, data = client.uid("search", None, "ALL")
+        raw_uids = data[0].split() if data and data[0] else []
+        uids = [int(x) for x in raw_uids]
+        existing = rows(db, "SELECT uid FROM inbox_emails")
+        known = {int(x["uid"]) for x in existing}
+        added = 0
+        for uid in reversed(uids):
+            if uid in known or added >= limit:
+                continue
+            _, fetched = client.uid("fetch", str(uid), "(RFC822)")
+            raw = next((part[1] for part in fetched if isinstance(part, tuple)), None)
+            if not raw:
+                continue
+            msg = BytesParser(policy=policy.default).parsebytes(raw)
+            sender_name, sender_email = parseaddr(str(msg.get("From", "")))
+            body = msg.get_body(preferencelist=("plain", "html"))
+            content = body.get_content() if body else ""
+            is_html = bool(body and body.get_content_type() == "text/html")
+            plain_content = re.sub(r"<[^>]+>", " ", content) if is_html else content
+            received = _normalize_received_at(msg.get("Date"))
+            db.execute(
+                text("""INSERT INTO inbox_emails (uid,message_id,from_name,from_email,to_email,subject,body,html_body,snippet,is_read,received_at,created_at)
+                    VALUES (:uid,:message_id,:from_name,:from_email,:to_email,:subject,:body,:html_body,:snippet,0,:received,:created)"""),
+                {
+                    "uid": uid,
+                    "message_id": str(msg.get("Message-ID", "")),
+                    "from_name": _decode_header(sender_name),
+                    "from_email": sender_email,
+                    "to_email": s.imap_username,
+                    "subject": _decode_header(str(msg.get("Subject", "(No subject)"))),
+                    "body": plain_content,
+                    "html_body": content if is_html else "",
+                    "snippet": plain_content[:255],
+                    "received": received,
+                    "created": now_iso(),
+                },
+            )
+            added += 1
+        db.commit()
+    finally:
+        try:
+            client.logout()
+        except Exception:
+            pass
+    return {"new_count": added, "total_inbox": len(uids), "synced_at": now_iso()}
+
+
+def run_inbox_sync(db: Session, limit: int = 30, trigger: str = "manual") -> dict[str, Any]:
+    if not _SYNC_LOCK.acquire(blocking=False):
+        raise RuntimeError("Inbox sync is already in progress")
+    try:
+        if not imap_configured():
+            message = "IMAP credentials are not configured"
+            timestamp = now_iso()
+            if trigger == "auto":
+                _record_sync_result(db, status="skipped", trigger=trigger, error=message, synced_at=timestamp)
+                result: dict[str, Any] = {
+                    "new_count": 0,
+                    "total_inbox": 0,
+                    "synced_at": timestamp,
+                    "status": "skipped",
+                    "error": message,
+                    "trigger": trigger,
+                }
+            else:
+                _record_sync_result(db, status="error", trigger=trigger, error=message, synced_at=timestamp)
+                raise ValueError(message)
+        else:
+            try:
+                synced = sync_inbox(db, limit=limit)
+            except Exception as exc:
+                db.rollback()
+                _record_sync_result(db, status="error", trigger=trigger, error=str(exc), synced_at=now_iso())
+                raise
+            _record_sync_result(
+                db,
+                status="success",
+                trigger=trigger,
+                new_count=int(synced["new_count"]),
+                total_inbox=int(synced["total_inbox"]),
+                synced_at=str(synced["synced_at"]),
+            )
+            result = {**synced, "status": "success", "error": "", "trigger": trigger}
+    finally:
+        _SYNC_LOCK.release()
+    return {**result, "sync_settings": get_sync_settings(db)}
 
 
 def whatsapp_request(method: str, path: str, body: dict[str, Any] | None = None, base_url: str | None = None, access_token: str | None = None) -> dict[str, Any]:

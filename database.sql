@@ -182,6 +182,20 @@ CREATE TABLE `whatsapp_messages` (
   PRIMARY KEY (`id`), KEY `idx_wa_message_chat` (`chat_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE `inbox_sync_settings` (
+  `id` INT NOT NULL,
+  `enabled` INT NOT NULL DEFAULT 0,
+  `interval_seconds` INT NOT NULL DEFAULT 300,
+  `last_sync_at` VARCHAR(64) DEFAULT NULL,
+  `last_status` VARCHAR(32) NOT NULL DEFAULT 'idle',
+  `last_error` TEXT NOT NULL,
+  `last_new_count` INT NOT NULL DEFAULT 0,
+  `last_total_inbox` INT NOT NULL DEFAULT 0,
+  `last_trigger` VARCHAR(32) NOT NULL DEFAULT '',
+  `updated_at` VARCHAR(64) NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
 COMMIT;
 
